@@ -6,8 +6,8 @@
  * errors must degrade to an in-memory session rather than a broken app.
  */
 
-import { SAMPLE_PROJECT_ID, emptyDraft, emptyProject, sampleDraft, sampleProject } from "./defaults";
-import type { PersistedState } from "./types";
+import { SAMPLE_PROJECT_ID, emptyDraft, emptyProject, emptyProjectDraft, sampleDraft, sampleProject } from "./defaults";
+import type { PersistedState, ProjectDraft } from "./types";
 
 const KEY = "figma-prompt-builder.v1";
 
@@ -49,11 +49,44 @@ export function reviveState(raw: unknown): PersistedState {
   const settings = isRecord(raw.settings) ? { ...base.settings, ...(raw.settings as object) } : base.settings;
 
   const safeProjects = projects.length > 0 ? projects : base.projects;
-  const draft = isRecord(raw.draft)
-    ? { ...emptyDraft(safeProjects[0].id), ...(raw.draft as object) }
-    : base.draft;
+  const draft = isRecord(raw.draft) ? reviveDraft(raw.draft, safeProjects[0].id) : base.draft;
 
   return { version: 1, projects: safeProjects, savedPrompts, draft, settings };
+}
+
+/**
+ * Earlier versions kept one flat set of briefs on the draft. Those are
+ * migrated onto the project they were written against, so upgrading
+ * never loses work and never spreads it across other projects.
+ */
+function reviveDraft(raw: Record<string, unknown>, fallbackProjectId: string): PersistedState["draft"] {
+  const projectId = typeof raw.projectId === "string" && raw.projectId ? raw.projectId : fallbackProjectId;
+  const base = emptyDraft(projectId);
+
+  const drafts: Record<string, ProjectDraft> = {};
+  if (isRecord(raw.drafts)) {
+    for (const [id, value] of Object.entries(raw.drafts)) {
+      if (isRecord(value)) drafts[id] = { ...emptyProjectDraft(), ...(value as object) };
+    }
+  } else {
+    const legacy = ["newScreen", "reference", "refine", "qa"].filter((key) => isRecord(raw[key]));
+    if (legacy.length > 0) {
+      drafts[projectId] = {
+        ...emptyProjectDraft(),
+        ...Object.fromEntries(legacy.map((key) => [key, raw[key]])),
+      } as ProjectDraft;
+    }
+  }
+  if (!drafts[projectId]) drafts[projectId] = emptyProjectDraft();
+
+  return {
+    ...base,
+    mode: typeof raw.mode === "string" ? (raw.mode as PersistedState["draft"]["mode"]) : base.mode,
+    projectId,
+    guardrails: typeof raw.guardrails === "boolean" ? raw.guardrails : base.guardrails,
+    detail: typeof raw.detail === "string" ? (raw.detail as PersistedState["draft"]["detail"]) : base.detail,
+    drafts,
+  };
 }
 
 export function loadState(): PersistedState {

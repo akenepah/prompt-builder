@@ -8,6 +8,7 @@
 
 import type {
   Draft,
+  ProjectDraft,
   NewScreenBrief,
   ProjectProfile,
   QABrief,
@@ -135,16 +136,22 @@ export function emptyQA(): QABrief {
   };
 }
 
+export function emptyProjectDraft(): ProjectDraft {
+  return {
+    newScreen: emptyNewScreen(),
+    reference: emptyReference(),
+    refine: emptyRefine(),
+    qa: emptyQA(),
+  };
+}
+
 export function emptyDraft(projectId: string): Draft {
   return {
     mode: "new-screen",
     projectId,
     guardrails: true,
     detail: "standard",
-    newScreen: emptyNewScreen(),
-    reference: emptyReference(),
-    refine: emptyRefine(),
-    qa: emptyQA(),
+    drafts: { [projectId]: emptyProjectDraft() },
   };
 }
 
@@ -284,15 +291,19 @@ export function sampleNewScreenBrief(): NewScreenBrief {
   };
 }
 
+/**
+ * First-run state. The worked example is attached to the sample project
+ * only — a project the user creates always starts empty, so example
+ * content can never appear in real work by accident.
+ */
 export function sampleDraft(): Draft {
   return {
     mode: "new-screen",
     projectId: SAMPLE_PROJECT_ID,
     guardrails: true,
     detail: "standard",
-    newScreen: sampleNewScreenBrief(),
-    reference: emptyReference(),
-    refine: emptyRefine(),
-    qa: emptyQA(),
+    drafts: {
+      [SAMPLE_PROJECT_ID]: { ...emptyProjectDraft(), newScreen: sampleNewScreenBrief() },
+    },
   };
 }

@@ -118,7 +118,7 @@ export function NewScreenForm({
           label="Screen name"
           value={brief.screenName}
           onChange={(screenName) => onChange({ screenName })}
-          placeholder="e.g. Billing settings"
+          placeholder="e.g. Account settings"
         />
         <Select
           label="Screen type"
@@ -131,7 +131,7 @@ export function NewScreenForm({
           hint="One or two sentences. What is this screen, and when does someone open it?"
           value={brief.whatWeAreDesigning}
           onChange={(whatWeAreDesigning) => onChange({ whatWeAreDesigning })}
-          placeholder="The screen a controller opens on Monday to see whether the next 13 weeks are safe."
+          placeholder="The screen someone opens to check status and decide what to do next."
         />
       </Collapsible>
 
@@ -141,7 +141,7 @@ export function NewScreenForm({
           hint="Who is on this screen, and in what situation?"
           value={brief.primaryUser}
           onChange={(primaryUser) => onChange({ primaryUser })}
-          placeholder="A controller, ten minutes before a leadership stand-up"
+          placeholder="Who they are, and what situation they are in"
         />
         <TextArea
           label="Primary goal"
@@ -149,7 +149,7 @@ export function NewScreenForm({
           value={brief.primaryGoal}
           onChange={(primaryGoal) => onChange({ primaryGoal })}
           rows={2}
-          placeholder="decide whether the next 13 weeks are safe, and find the first week that breaks"
+          placeholder="the one thing they must be able to accomplish here"
         />
         <TextArea
           label="Secondary goals"
@@ -187,13 +187,13 @@ export function NewScreenForm({
             label="Primary action"
             value={brief.primaryCta}
             onChange={(primaryCta) => onChange({ primaryCta })}
-            placeholder="Adjust assumptions"
+            placeholder="Primary button label"
           />
           <TextInput
             label="Secondary action"
             value={brief.secondaryCta}
             onChange={(secondaryCta) => onChange({ secondaryCta })}
-            placeholder="Export forecast"
+            placeholder="Secondary button label"
           />
         </div>
       </Collapsible>
@@ -213,7 +213,7 @@ export function NewScreenForm({
       <Collapsible title="Visual direction" summary={summarize(brief.visualDirection)}>
         <TextArea
           label="Visual direction"
-          hint="Describe the feeling in concrete terms — “reads like a financial document”, not “modern and clean”."
+          hint="Describe the feeling in concrete terms — “reads like a printed timetable”, not “modern and clean”."
           value={brief.visualDirection}
           onChange={(visualDirection) => onChange({ visualDirection })}
         />
@@ -314,7 +314,7 @@ export function ReferenceForm({
           label="Target screen"
           value={brief.targetScreen}
           onChange={(targetScreen) => onChange({ targetScreen })}
-          placeholder="Forecast overview"
+          placeholder="The screen you are designing"
         />
         <TextArea
           label="What are we creating?"
@@ -421,7 +421,7 @@ export function RefineForm({
           label="Screen / frame name"
           value={brief.frameName}
           onChange={(frameName) => onChange({ frameName })}
-          placeholder="13-Week Cash Forecast — Desktop"
+          placeholder="Frame name as it appears in Figma"
         />
         <TextArea
           label="Area being changed"
@@ -429,7 +429,7 @@ export function RefineForm({
           value={brief.areaBeingChanged}
           onChange={(areaBeingChanged) => onChange({ areaBeingChanged })}
           rows={2}
-          placeholder="the drivers panel below the grid"
+          placeholder="the section you want changed"
         />
       </Collapsible>
 
@@ -514,7 +514,7 @@ export function QAForm({
           label="Screen / frame"
           value={brief.frameName}
           onChange={(frameName) => onChange({ frameName })}
-          placeholder="13-Week Cash Forecast — Desktop"
+          placeholder="Frame name as it appears in Figma"
         />
         <div className="flex flex-col gap-1.5">
           <span className="text-[12px] font-medium text-fpb-ink">QA depth</span>

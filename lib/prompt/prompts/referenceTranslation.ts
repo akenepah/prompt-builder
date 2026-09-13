@@ -129,7 +129,7 @@ export function compileReferenceTranslation(brief: ReferenceBrief, context: Prom
         hierarchy.length > 0
           ? `The user should notice things in this order:\n${numbered(hierarchy)}\nIf the reference's composition would disturb this order, change the composition, not the order.`
           : "",
-        contentHonestyBody(),
+        contentHonestyBody(detail),
       ),
     ),
     section("DESIGN SYSTEM — NON-NEGOTIABLE", designSystemBody(context)),

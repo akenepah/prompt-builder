@@ -11,14 +11,17 @@ import { BookOpen, FolderOpen, Plus, RotateCcw, Save, Sparkles } from "lucide-re
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   emptyNewScreen,
+  emptyProjectDraft,
   emptyQA,
   emptyReference,
   emptyRefine,
   newId,
   sampleNewScreenBrief,
 } from "@/lib/prompt/defaults";
+import { detectConflicts } from "@/lib/prompt/conflicts";
+import { isBriefEmpty } from "@/lib/prompt/emptiness";
 import { MODES } from "@/lib/prompt/options";
-import { briefFor, compileDraft, contextFor } from "@/lib/prompt/prompts";
+import { briefFor, compileDraft, contextFor, projectDraft } from "@/lib/prompt/prompts";
 import { evaluateReadiness } from "@/lib/prompt/readiness";
 import { getServerSnapshot, getSnapshot, subscribe, updateState } from "@/lib/prompt/store";
 import type {
@@ -26,6 +29,7 @@ import type {
   DetailLevel,
   Draft,
   NewScreenBrief,
+  ProjectDraft,
   ProjectProfile,
   PromptMode,
   QABrief,
@@ -38,22 +42,29 @@ import { GuidelinesModal } from "./GuidelinesModal";
 import { ProjectsModal } from "./ProjectsModal";
 import { PromptPanel, ReadinessPill } from "./PromptPanel";
 import { SavedPromptsModal } from "./SavedPromptsModal";
-import { Button, Segmented, Toggle } from "./ui";
+import { Button, Modal, Segmented } from "./ui";
 
-function deriveTitle(draft: Draft): string {
+interface ConfirmRequest {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+}
+
+function deriveTitle(draft: Draft, current: ProjectDraft): string {
   switch (draft.mode) {
     case "new-screen":
-      return draft.newScreen.screenName.trim() || draft.newScreen.screenType.trim() || "Untitled screen";
+      return current.newScreen.screenName.trim() || current.newScreen.screenType.trim() || "Untitled screen";
     case "reference":
-      return draft.reference.targetScreen.trim()
-        ? `Reference — ${draft.reference.targetScreen.trim()}`
+      return current.reference.targetScreen.trim()
+        ? `Reference — ${current.reference.targetScreen.trim()}`
         : "Reference translation";
     case "refine":
-      return draft.refine.areaBeingChanged.trim()
-        ? `Refine — ${draft.refine.areaBeingChanged.trim()}`
-        : draft.refine.frameName.trim() || "Refinement";
+      return current.refine.areaBeingChanged.trim()
+        ? `Refine — ${current.refine.areaBeingChanged.trim()}`
+        : current.refine.frameName.trim() || "Refinement";
     case "qa":
-      return draft.qa.frameName.trim() ? `QA — ${draft.qa.frameName.trim()}` : "Design QA";
+      return current.qa.frameName.trim() ? `QA — ${current.qa.frameName.trim()}` : "Design QA";
   }
 }
 
@@ -89,6 +100,8 @@ export function Workspace() {
   const [view, setView] = useState<"brief" | "prompt">("brief");
   const [dialog, setDialog] = useState<"projects" | "saved" | "guidelines" | null>(null);
   const [activeSavedId, setActiveSavedId] = useState<string | null>(null);
+  const [lastSavedPrompt, setLastSavedPrompt] = useState("");
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const flash = useCallback((message: string) => {
@@ -105,37 +118,87 @@ export function Workspace() {
   const project: ProjectProfile | null =
     projects.find((entry) => entry.id === draft.projectId) ?? projects[0] ?? null;
 
+  /** Only this project's briefs are ever read or written. */
+  const current = useMemo(() => projectDraft(draft), [draft]);
   const promptContext = useMemo(() => contextFor(draft, project), [draft, project]);
-  const prompt = useMemo(() => compileDraft(draft, project), [draft, project]);
-  const readiness = useMemo(() => evaluateReadiness(draft, project), [draft, project]);
+  const briefEmpty = useMemo(() => isBriefEmpty(draft), [draft]);
+  const prompt = useMemo(() => (briefEmpty ? "" : compileDraft(draft, project)), [briefEmpty, draft, project]);
+  const conflicts = useMemo(() => detectConflicts(draft, project, projects), [draft, project, projects]);
+  const readiness = useMemo(() => evaluateReadiness(draft, project, conflicts), [conflicts, draft, project]);
 
   const patchDraft = useCallback((patch: Partial<Draft>) => {
-    updateState((current) => ({ ...current, draft: { ...current.draft, ...patch } }));
+    updateState((state) => ({ ...state, draft: { ...state.draft, ...patch } }));
   }, []);
 
-  const patchNewScreen = useCallback((patch: Partial<NewScreenBrief>) => {
-    updateState((current) => ({
-      ...current,
-      draft: { ...current.draft, newScreen: { ...current.draft.newScreen, ...patch } },
-    }));
+  /** Write into the active project's draft, creating it on first touch. */
+  const patchProjectDraft = useCallback((patch: Partial<ProjectDraft>) => {
+    updateState((state) => {
+      const id = state.draft.projectId;
+      const existing = state.draft.drafts[id] ?? emptyProjectDraft();
+      return {
+        ...state,
+        draft: { ...state.draft, drafts: { ...state.draft.drafts, [id]: { ...existing, ...patch } } },
+      };
+    });
   }, []);
+
+  const patchNewScreen = useCallback(
+    (patch: Partial<NewScreenBrief>) => {
+      updateState((state) => {
+        const id = state.draft.projectId;
+        const existing = state.draft.drafts[id] ?? emptyProjectDraft();
+        return {
+          ...state,
+          draft: {
+            ...state.draft,
+            drafts: { ...state.draft.drafts, [id]: { ...existing, newScreen: { ...existing.newScreen, ...patch } } },
+          },
+        };
+      });
+    },
+    [],
+  );
 
   const patchReference = useCallback((patch: Partial<ReferenceBrief>) => {
-    updateState((current) => ({
-      ...current,
-      draft: { ...current.draft, reference: { ...current.draft.reference, ...patch } },
-    }));
+    updateState((state) => {
+      const id = state.draft.projectId;
+      const existing = state.draft.drafts[id] ?? emptyProjectDraft();
+      return {
+        ...state,
+        draft: {
+          ...state.draft,
+          drafts: { ...state.draft.drafts, [id]: { ...existing, reference: { ...existing.reference, ...patch } } },
+        },
+      };
+    });
   }, []);
 
   const patchRefine = useCallback((patch: Partial<RefineBrief>) => {
-    updateState((current) => ({
-      ...current,
-      draft: { ...current.draft, refine: { ...current.draft.refine, ...patch } },
-    }));
+    updateState((state) => {
+      const id = state.draft.projectId;
+      const existing = state.draft.drafts[id] ?? emptyProjectDraft();
+      return {
+        ...state,
+        draft: {
+          ...state.draft,
+          drafts: { ...state.draft.drafts, [id]: { ...existing, refine: { ...existing.refine, ...patch } } },
+        },
+      };
+    });
   }, []);
 
   const patchQA = useCallback((patch: Partial<QABrief>) => {
-    updateState((current) => ({ ...current, draft: { ...current.draft, qa: { ...current.draft.qa, ...patch } } }));
+    updateState((state) => {
+      const id = state.draft.projectId;
+      const existing = state.draft.drafts[id] ?? emptyProjectDraft();
+      return {
+        ...state,
+        draft: {
+          ...state.draft,
+          drafts: { ...state.draft.drafts, [id]: { ...existing, qa: { ...existing.qa, ...patch } } },
+        },
+      };
+    });
   }, []);
 
   const patchProject = useCallback((id: string, patch: Partial<ProjectProfile>) => {
@@ -160,6 +223,21 @@ export function Workspace() {
     [patchProject, project],
   );
 
+  /** Switching projects swaps the whole working draft — nothing carries over. */
+  const selectProject = useCallback((projectId: string) => {
+    updateState((state) => ({
+      ...state,
+      draft: {
+        ...state.draft,
+        projectId,
+        drafts: state.draft.drafts[projectId]
+          ? state.draft.drafts
+          : { ...state.draft.drafts, [projectId]: emptyProjectDraft() },
+      },
+    }));
+    setActiveSavedId(null);
+  }, []);
+
   const handleCopy = useCallback(async () => {
     if (!prompt.trim()) return;
     const ok = await copyText(prompt);
@@ -183,8 +261,8 @@ export function Workspace() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [handleCopy]);
 
-  const startNew = () => {
-    const fresh: Partial<Draft> =
+  const clearCurrentMode = () => {
+    const fresh: Partial<ProjectDraft> =
       draft.mode === "new-screen"
         ? { newScreen: emptyNewScreen() }
         : draft.mode === "reference"
@@ -192,31 +270,72 @@ export function Workspace() {
           : draft.mode === "refine"
             ? { refine: emptyRefine() }
             : { qa: emptyQA() };
-    patchDraft(fresh);
+    patchProjectDraft(fresh);
     setActiveSavedId(null);
+    setLastSavedPrompt("");
     flash("New brief");
   };
 
-  const resetAll = () => {
-    updateState((current) => ({
-      ...current,
-      draft: {
-        ...current.draft,
-        newScreen: emptyNewScreen(),
-        reference: emptyReference(),
-        refine: emptyRefine(),
-        qa: emptyQA(),
-      },
-    }));
-    setActiveSavedId(null);
-    flash("All briefs cleared");
+  /** Never discard work silently: ask first, and only when there is work. */
+  const startNew = () => {
+    if (briefEmpty) {
+      clearCurrentMode();
+      return;
+    }
+    setConfirm({
+      title: "Start a new brief?",
+      body: activeSavedId
+        ? "This clears the brief you are working on. Your saved copy stays in Saved prompts."
+        : "This clears the brief you are working on, and it has not been saved. Save it first if you want to keep it.",
+      confirmLabel: "Clear and start new",
+      onConfirm: clearCurrentMode,
+    });
   };
 
-  const save = () => {
+  const resetAll = () => {
+    const run = () => {
+      updateState((state) => ({
+        ...state,
+        draft: {
+          ...state.draft,
+          drafts: { ...state.draft.drafts, [state.draft.projectId]: emptyProjectDraft() },
+        },
+      }));
+      setActiveSavedId(null);
+      setLastSavedPrompt("");
+      flash(`All briefs cleared for ${project?.name ?? "this project"}`);
+    };
+
+    const anyContent = (["new-screen", "reference", "refine", "qa"] as const).some(
+      (mode) => !isBriefEmpty(draft, mode),
+    );
+    if (!anyContent) {
+      run();
+      return;
+    }
+    setConfirm({
+      title: `Clear every brief in ${project?.name ?? "this project"}?`,
+      body: "All four modes are cleared for this project. Other projects and saved prompts are untouched. This cannot be undone.",
+      confirmLabel: "Clear all briefs",
+      onConfirm: run,
+    });
+  };
+
+  const save = (asNew = false) => {
+    if (briefEmpty) {
+      flash("Nothing to save yet — fill in the brief first");
+      return;
+    }
+    if (!asNew && activeSavedId && prompt === lastSavedPrompt) {
+      flash("No changes since the last save");
+      return;
+    }
+
     const now = Date.now();
+    const id = asNew || !activeSavedId ? newId("saved") : activeSavedId;
     const entry: SavedPrompt = {
-      id: activeSavedId ?? newId("saved"),
-      title: deriveTitle(draft),
+      id,
+      title: deriveTitle(draft, current),
       projectId: project?.id ?? "",
       projectName: project?.name ?? "No project",
       mode: draft.mode,
@@ -228,37 +347,47 @@ export function Workspace() {
       brief: structuredClone(briefFor(draft)),
       prompt,
     };
-    updateState((current) => {
-      const existing = current.savedPrompts.find((item) => item.id === entry.id);
+
+    updateState((state) => {
+      const existing = state.savedPrompts.find((item) => item.id === entry.id);
       const savedList = existing
-        ? current.savedPrompts.map((item) =>
+        ? state.savedPrompts.map((item) =>
             item.id === entry.id ? { ...entry, title: item.title, createdAt: item.createdAt } : item,
           )
-        : [...current.savedPrompts, entry];
-      return { ...current, savedPrompts: savedList };
+        : [...state.savedPrompts, asNew ? { ...entry, title: `${entry.title} copy` } : entry];
+      return { ...state, savedPrompts: savedList };
     });
     setActiveSavedId(entry.id);
-    flash(activeSavedId ? "Saved prompt updated" : "Saved");
+    setLastSavedPrompt(prompt);
+    flash(asNew ? "Saved as a new prompt" : activeSavedId ? "Saved prompt updated" : "Saved");
   };
 
   const openSaved = (saved: SavedPrompt) => {
-    updateState((current) => {
-      const next: Draft = {
-        ...current.draft,
-        mode: saved.mode,
-        guardrails: saved.guardrails,
-        detail: saved.detail ?? current.draft.detail,
-        projectId: current.projects.some((entry) => entry.id === saved.projectId)
-          ? saved.projectId
-          : current.draft.projectId,
+    updateState((state) => {
+      const projectId = state.projects.some((entry) => entry.id === saved.projectId)
+        ? saved.projectId
+        : state.draft.projectId;
+      const existing = state.draft.drafts[projectId] ?? emptyProjectDraft();
+      const restored: ProjectDraft = { ...existing };
+      if (saved.mode === "new-screen") restored.newScreen = saved.brief as NewScreenBrief;
+      if (saved.mode === "reference") restored.reference = saved.brief as ReferenceBrief;
+      if (saved.mode === "refine") restored.refine = saved.brief as RefineBrief;
+      if (saved.mode === "qa") restored.qa = saved.brief as QABrief;
+
+      return {
+        ...state,
+        draft: {
+          ...state.draft,
+          mode: saved.mode,
+          projectId,
+          guardrails: saved.guardrails,
+          detail: saved.detail ?? state.draft.detail,
+          drafts: { ...state.draft.drafts, [projectId]: restored },
+        },
       };
-      if (saved.mode === "new-screen") next.newScreen = saved.brief as NewScreenBrief;
-      if (saved.mode === "reference") next.reference = saved.brief as ReferenceBrief;
-      if (saved.mode === "refine") next.refine = saved.brief as RefineBrief;
-      if (saved.mode === "qa") next.qa = saved.brief as QABrief;
-      return { ...current, draft: next };
     });
     setActiveSavedId(saved.id);
+    setLastSavedPrompt(saved.prompt);
     setDialog(null);
     setView("brief");
   };
@@ -266,8 +395,8 @@ export function Workspace() {
   const modeSummary = MODES.find((mode) => mode.id === draft.mode);
 
   return (
-    <div className="fpb-app flex min-h-dvh flex-col bg-fpb-canvas text-fpb-ink">
-      <header className="sticky top-0 z-30 border-b border-fpb-line bg-fpb-panel">
+    <div className="fpb-app flex min-h-dvh flex-col bg-fpb-canvas text-fpb-ink lg:h-dvh lg:overflow-hidden">
+      <header className="sticky top-0 z-30 shrink-0 border-b border-fpb-line bg-fpb-panel lg:static">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 md:px-6">
           <h1 className="text-[13.5px] font-semibold tracking-[-0.01em] text-fpb-ink">Figma Prompt Builder</h1>
 
@@ -277,7 +406,7 @@ export function Workspace() {
           <select
             id="fpb-project"
             value={project?.id ?? ""}
-            onChange={(event) => patchDraft({ projectId: event.target.value })}
+            onChange={(event) => selectProject(event.target.value)}
             className="h-8 max-w-[190px] rounded border border-fpb-line-strong bg-fpb-panel px-2 text-[12.5px] text-fpb-ink"
           >
             {projects.map((entry) => (
@@ -319,10 +448,15 @@ export function Workspace() {
               <Plus aria-hidden className="h-3.5 w-3.5" />
               New
             </Button>
-            <Button size="sm" onClick={save}>
+            <Button size="sm" onClick={() => save()} disabled={briefEmpty} title={briefEmpty ? "Fill in the brief first" : undefined}>
               <Save aria-hidden className="h-3.5 w-3.5" />
-              Save
+              {activeSavedId ? "Update" : "Save"}
             </Button>
+            {activeSavedId ? (
+              <Button size="sm" onClick={() => save(true)} disabled={briefEmpty}>
+                Save as new
+              </Button>
+            ) : null}
             <Button size="sm" onClick={resetAll}>
               <RotateCcw aria-hidden className="h-3.5 w-3.5" />
               Reset
@@ -374,7 +508,7 @@ export function Workspace() {
         </div>
       </header>
 
-      <main className="flex min-h-0 flex-1 flex-col lg:h-[calc(100dvh-97px)] lg:flex-row">
+      <main className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <section
           aria-label="Design brief"
           className={`min-h-0 w-full shrink-0 overflow-y-auto border-fpb-line bg-fpb-panel lg:w-[42%] lg:border-r ${
@@ -397,19 +531,11 @@ export function Workspace() {
             ) : null}
           </div>
 
-          {draft.mode === "new-screen" ? <NewScreenForm brief={draft.newScreen} onChange={patchNewScreen} /> : null}
-          {draft.mode === "reference" ? <ReferenceForm brief={draft.reference} onChange={patchReference} /> : null}
-          {draft.mode === "refine" ? <RefineForm brief={draft.refine} onChange={patchRefine} /> : null}
-          {draft.mode === "qa" ? <QAForm brief={draft.qa} onChange={patchQA} /> : null}
+          {draft.mode === "new-screen" ? <NewScreenForm brief={current.newScreen} onChange={patchNewScreen} /> : null}
+          {draft.mode === "reference" ? <ReferenceForm brief={current.reference} onChange={patchReference} /> : null}
+          {draft.mode === "refine" ? <RefineForm brief={current.refine} onChange={patchRefine} /> : null}
+          {draft.mode === "qa" ? <QAForm brief={current.qa} onChange={patchQA} /> : null}
 
-          <div className="px-4 py-5 md:px-5">
-            <Toggle
-              label="Anti-AI UI guardrails"
-              hint="Writes the anti-pattern rules into every prompt: no default cards, no gradients, no invented content, typography and spacing before containers."
-              checked={draft.guardrails}
-              onChange={(guardrails) => patchDraft({ guardrails })}
-            />
-          </div>
         </section>
 
         <section
@@ -426,6 +552,8 @@ export function Workspace() {
             detail={draft.detail}
             onContextModeChange={setContextMode}
             onDetailChange={(detail: DetailLevel) => patchDraft({ detail })}
+            conflicts={conflicts}
+            projectName={project?.name ?? ""}
           />
         </section>
       </main>
@@ -436,12 +564,12 @@ export function Workspace() {
           activeId={project?.id ?? ""}
           defaultId={state.settings.defaultProjectId}
           onSave={(next) => updateState((current) => ({ ...current, projects: next }))}
-          onSelect={(id) => patchDraft({ projectId: id })}
+          onSelect={selectProject}
           onSetDefault={(id) =>
             updateState((current) => ({ ...current, settings: { ...current.settings, defaultProjectId: id } }))
           }
           onViewGuidelines={(id: string) => {
-            patchDraft({ projectId: id });
+            selectProject(id);
             setDialog("guidelines");
           }}
           onClose={() => setDialog(null)}
@@ -465,6 +593,26 @@ export function Workspace() {
           onChange={(next) => updateState((current) => ({ ...current, savedPrompts: next }))}
           onClose={() => setDialog(null)}
         />
+      ) : null}
+
+      {confirm ? (
+        <Modal title={confirm.title} onClose={() => setConfirm(null)}>
+          <div className="px-5 py-4">
+            <p className="text-[13px] leading-[1.6] text-fpb-muted">{confirm.body}</p>
+          </div>
+          <footer className="flex justify-end gap-2 border-t border-fpb-line px-5 py-3">
+            <Button onClick={() => setConfirm(null)}>Cancel</Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                confirm.onConfirm();
+                setConfirm(null);
+              }}
+            >
+              {confirm.confirmLabel}
+            </Button>
+          </footer>
+        </Modal>
       ) : null}
 
       <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center">

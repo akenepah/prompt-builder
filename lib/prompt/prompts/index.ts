@@ -7,7 +7,18 @@
  * uniform is what makes an optional LLM polish stage a later drop-in.
  */
 
-import type { Draft, NewScreenBrief, ProjectProfile, PromptMode, QABrief, ReferenceBrief, RefineBrief, SavedPrompt } from "../types";
+import { emptyProjectDraft } from "../defaults";
+import type {
+  Draft,
+  NewScreenBrief,
+  ProjectDraft,
+  ProjectProfile,
+  PromptMode,
+  QABrief,
+  ReferenceBrief,
+  RefineBrief,
+  SavedPrompt,
+} from "../types";
 import { compileDesignQA } from "./designQA";
 import { compileNewScreen } from "./newScreen";
 import { compileReferenceTranslation } from "./referenceTranslation";
@@ -33,16 +44,22 @@ export function compileDraft(draft: Draft, project: ProjectProfile | null): stri
   return compileBrief(draft.mode, briefFor(draft), contextFor(draft, project));
 }
 
-export function briefFor(draft: Draft): SavedPrompt["brief"] {
-  switch (draft.mode) {
+/** The active project's briefs. Never falls back to another project's work. */
+export function projectDraft(draft: Draft, projectId = draft.projectId): ProjectDraft {
+  return draft.drafts[projectId] ?? emptyProjectDraft();
+}
+
+export function briefFor(draft: Draft, mode: PromptMode = draft.mode): SavedPrompt["brief"] {
+  const current = projectDraft(draft);
+  switch (mode) {
     case "new-screen":
-      return draft.newScreen;
+      return current.newScreen;
     case "reference":
-      return draft.reference;
+      return current.reference;
     case "refine":
-      return draft.refine;
+      return current.refine;
     case "qa":
-      return draft.qa;
+      return current.qa;
   }
 }
 

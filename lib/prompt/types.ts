@@ -157,16 +157,27 @@ export interface QABrief {
   expandContainers: boolean;
 }
 
+/**
+ * One project's work in progress: a brief per prompt mode.
+ *
+ * Drafts are keyed by project id so switching projects can never carry
+ * one project's screen content into another's prompt.
+ */
+export interface ProjectDraft {
+  newScreen: NewScreenBrief;
+  reference: ReferenceBrief;
+  refine: RefineBrief;
+  qa: QABrief;
+}
+
 /** The live, autosaved working state of the builder. */
 export interface Draft {
   mode: PromptMode;
   projectId: string;
   guardrails: boolean;
   detail: DetailLevel;
-  newScreen: NewScreenBrief;
-  reference: ReferenceBrief;
-  refine: RefineBrief;
-  qa: QABrief;
+  /** projectId → that project's briefs. Never shared between projects. */
+  drafts: Record<string, ProjectDraft>;
 }
 
 export interface SavedPrompt {

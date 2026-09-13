@@ -3,6 +3,7 @@ import { compileGuidelines } from "../guidelines";
 import {
   emptyNewScreen,
   emptyProject,
+  emptyProjectDraft,
   emptyQA,
   emptyReference,
   emptyRefine,
@@ -10,10 +11,13 @@ import {
   sampleNewScreenBrief,
   sampleProject,
 } from "../defaults";
+import { detectConflicts, hasCriticalConflict } from "../conflicts";
+import { isBriefEmpty } from "../emptiness";
 import { evaluateReadiness } from "../readiness";
 import { reviveState } from "../storage";
-import type { ContextMode, DetailLevel, Draft, ProjectProfile } from "../types";
+import type { ContextMode, DetailLevel, Draft, NewScreenBrief, ProjectProfile } from "../types";
 import {
+  briefFor,
   compileDesignQA,
   compileDraft,
   compileNewScreen,
@@ -512,13 +516,10 @@ describe("guidelines + prompt together", () => {
 describe("readiness", () => {
   const blankDraft = (mode: Draft["mode"]): Draft => ({
     mode,
-    projectId: "",
+    projectId: "p",
     guardrails: true,
     detail: "standard",
-    newScreen: emptyNewScreen(),
-    reference: emptyReference(),
-    refine: emptyRefine(),
-    qa: emptyQA(),
+    drafts: { p: emptyProjectDraft() },
   });
 
   test("the sample brief with its project is strong", () => {
@@ -534,10 +535,11 @@ describe("readiness", () => {
 
   test("readiness is not a field count — hierarchy and goal dominate", () => {
     const padded = blankDraft("new-screen");
-    padded.newScreen.visualDirection = "quiet";
-    padded.newScreen.layoutNotes = "full width";
-    padded.newScreen.interactionNotes = "inline edit";
-    padded.newScreen.screenRules = "no tiles";
+    const brief = padded.drafts.p.newScreen;
+    brief.visualDirection = "quiet";
+    brief.layoutNotes = "full width";
+    brief.interactionNotes = "inline edit";
+    brief.screenRules = "no tiles";
     expect(evaluateReadiness(padded, null).level).toBe("needs-context");
   });
 });
@@ -550,7 +552,7 @@ describe("storage", () => {
     expect(state.draft.mode).toBe("new-screen");
   });
 
-  test("a v1.0 payload gains the v1.1 fields instead of undefined", () => {
+  test("a v1.0 payload gains the later fields instead of undefined", () => {
     const state = reviveState({
       draft: { mode: "qa", projectId: "p1", guardrails: true },
       projects: [{ id: "p1", name: "Old", colors: [], grid: { columns: "12" } }],
@@ -559,6 +561,19 @@ describe("storage", () => {
     expect(state.projects[0].guidelinesInstalled).toBe(false);
     expect(state.projects[0].name).toBe("Old");
     expect(state.projects[0].grid.maxWidth).toBeTruthy();
+  });
+
+  test("a flat pre-isolation draft is migrated onto the project it was written for", () => {
+    const state = reviveState({
+      draft: {
+        mode: "new-screen",
+        projectId: "p1",
+        newScreen: { ...emptyNewScreen(), screenName: "Old work" },
+      },
+      projects: [{ id: "p1", name: "Old", colors: [], grid: {} }],
+    });
+    expect(state.draft.drafts.p1.newScreen.screenName).toBe("Old work");
+    expect(Object.keys(state.draft.drafts)).toEqual(["p1"]);
   });
 });
 
@@ -574,5 +589,284 @@ describe("dispatch", () => {
     const draft = sampleDraft();
     expect(contextFor(draft, project).contextMode).toBe("embedded");
     expect(contextFor(draft, { ...project, guidelinesInstalled: true }).contextMode).toBe("guidelines");
+  });
+});
+
+
+describe("project isolation", () => {
+  const ledgerline = sampleProject();
+  const zoo: ProjectProfile = {
+    ...emptyProject("Woodland Park Zoo"),
+    productDescription: "A zoo website for planning a family visit.",
+    primaryUsers: "Parents planning a weekend outing.",
+    headingTypeface: "Recoleta 600",
+    colors: [{ id: "z1", name: "moss", value: "#2F5D3A", purpose: "primary" }],
+    imagery: "Large wildlife photography, full bleed.",
+  };
+
+  function twoProjectDraft(active: string): Draft {
+    return {
+      mode: "new-screen",
+      projectId: active,
+      guardrails: true,
+      detail: "standard",
+      drafts: {
+        [ledgerline.id]: { ...emptyProjectDraft(), newScreen: sampleNewScreenBrief() },
+        [zoo.id]: {
+          ...emptyProjectDraft(),
+          newScreen: { ...emptyNewScreen(), screenName: "WPZ-01 Homepage", primaryGoal: "plan a visit" },
+        },
+      },
+    };
+  }
+
+  test("each project reads its own brief", () => {
+    const draft = twoProjectDraft(zoo.id);
+    expect((briefFor(draft) as NewScreenBrief).screenName).toBe("WPZ-01 Homepage");
+    expect((briefFor({ ...draft, projectId: ledgerline.id }) as NewScreenBrief).screenName).toBe("13-Week Cash Forecast");
+  });
+
+  test("a project with no draft yet starts empty, not with someone else's work", () => {
+    const draft: Draft = { ...twoProjectDraft(ledgerline.id), projectId: "brand-new" };
+    expect(isBriefEmpty(draft)).toBe(true);
+    expect((briefFor(draft) as NewScreenBrief).screenName).toBe("");
+  });
+
+  test("the generated prompt carries no trace of the other project", () => {
+    const prompt = compileDraft(twoProjectDraft(zoo.id), zoo);
+    for (const leak of [
+      "Ledgerline",
+      "13-Week Cash Forecast",
+      "Söhne",
+      "#1F4FD8",
+      "cash",
+      "forecast",
+      "runway",
+      "controller",
+      "tabular",
+    ]) {
+      expect(prompt.toLowerCase()).not.toContain(leak.toLowerCase());
+    }
+    expect(prompt).toContain("WPZ-01 Homepage");
+  });
+
+  test("switching back restores the original project's brief intact", () => {
+    const draft = twoProjectDraft(zoo.id);
+    const back = { ...draft, projectId: ledgerline.id };
+    const prompt = compileDraft(back, ledgerline);
+    expect(prompt).toContain("13-Week Cash Forecast");
+    expect(prompt).not.toContain("WPZ-01 Homepage");
+  });
+
+  test("the worked example is attached to the sample project only", () => {
+    const state = reviveState(undefined);
+    expect(Object.keys(state.draft.drafts)).toEqual([sampleProject().id]);
+  });
+});
+
+describe("conflict detection", () => {
+  const ledgerline = sampleProject();
+  const zoo: ProjectProfile = { ...emptyProject("Woodland Park Zoo"), imagery: "No photography anywhere." };
+
+  function draftWith(brief: Partial<NewScreenBrief>, projectId: string): Draft {
+    return {
+      mode: "new-screen",
+      projectId,
+      guardrails: true,
+      detail: "standard",
+      drafts: { [projectId]: { ...emptyProjectDraft(), newScreen: { ...emptyNewScreen(), ...brief } } },
+    };
+  }
+
+  test("flags a brief written for a different project in the workspace", () => {
+    const draft = draftWith(
+      { screenName: "Woodland Park Zoo homepage", whatWeAreDesigning: "The Woodland Park Zoo landing page." },
+      ledgerline.id,
+    );
+    const conflicts = detectConflicts(draft, ledgerline, [ledgerline, zoo]);
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0].title).toContain("Woodland Park Zoo");
+    expect(conflicts[0].severity).toBe("critical");
+  });
+
+  test("does not flag a brief that names its own project", () => {
+    const draft = draftWith({ whatWeAreDesigning: "A Ledgerline screen for Ledgerline users." }, ledgerline.id);
+    expect(detectConflicts(draft, ledgerline, [ledgerline, zoo])).toHaveLength(0);
+  });
+
+  test("flags a brief asking for something the profile forbids", () => {
+    const draft = draftWith({ visualDirection: "Use large wildlife photography across the hero." }, zoo.id);
+    const conflicts = detectConflicts(draft, zoo, [zoo]);
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0].title).toContain("photography");
+    expect(conflicts[0].detail).toContain("No photography anywhere.");
+  });
+
+  test("does not flag a brief that agrees with the rule", () => {
+    const draft = draftWith({ visualDirection: "No photography — illustration only." }, zoo.id);
+    expect(detectConflicts(draft, zoo, [zoo])).toHaveLength(0);
+  });
+
+  test("catches the project's own do-not rules too", () => {
+    const draft = draftWith({ layoutNotes: "Open with a row of stat tiles." }, ledgerline.id);
+    const conflicts = detectConflicts(draft, ledgerline, [ledgerline]);
+    expect(conflicts.some((conflict) => conflict.id === "rule-tiles")).toBe(true);
+  });
+
+  test("an affirmative mention still counts when an earlier mention was negated", () => {
+    const draft = draftWith(
+      {
+        layoutNotes: "A single line of type, not as tiles.",
+        visualDirection: "Big gradients and stat tiles across the top.",
+      },
+      ledgerline.id,
+    );
+    const ids = detectConflicts(draft, ledgerline, [ledgerline]).map((conflict) => conflict.id);
+    expect(ids).toContain("rule-tiles");
+    expect(ids).toContain("rule-gradient");
+  });
+
+  test("a rule the brief also rules out is not a conflict, however it is phrased", () => {
+    for (const phrasing of [
+      "Do not open the screen with a row of stat tiles.",
+      "One line of plain language. Not three stat tiles.",
+      "A single line of type, not as tiles.",
+      "Use a table instead of stat tiles.",
+    ]) {
+      const draft = draftWith({ layoutNotes: phrasing }, ledgerline.id);
+      expect(detectConflicts(draft, ledgerline, [ledgerline]).map((c) => c.id)).not.toContain("rule-tiles");
+    }
+  });
+
+  test("the shipped sample brief has no conflicts with its own project", () => {
+    const draft: Draft = {
+      mode: "new-screen",
+      projectId: ledgerline.id,
+      guardrails: true,
+      detail: "standard",
+      drafts: { [ledgerline.id]: { ...emptyProjectDraft(), newScreen: sampleNewScreenBrief() } },
+    };
+    expect(detectConflicts(draft, ledgerline, [ledgerline])).toHaveLength(0);
+  });
+
+  test("an empty brief conflicts with nothing", () => {
+    expect(detectConflicts(draftWith({}, ledgerline.id), ledgerline, [ledgerline, zoo])).toHaveLength(0);
+  });
+
+  test("a critical conflict prevents a Strong readiness rating", () => {
+    const draft: Draft = {
+      mode: "new-screen",
+      projectId: ledgerline.id,
+      guardrails: true,
+      detail: "standard",
+      drafts: { [ledgerline.id]: { ...emptyProjectDraft(), newScreen: sampleNewScreenBrief() } },
+    };
+    expect(evaluateReadiness(draft, ledgerline).level).toBe("strong");
+
+    const conflicts = detectConflicts(draft, ledgerline, [ledgerline, zoo]);
+    const conflicted = evaluateReadiness(draft, ledgerline, [
+      { id: "x", severity: "critical", title: "t", detail: "d" },
+    ]);
+    expect(conflicted.level).toBe("good");
+    expect(hasCriticalConflict(conflicts)).toBe(false);
+  });
+});
+
+describe("empty briefs", () => {
+  function draftFor(mode: Draft["mode"]): Draft {
+    return { mode, projectId: "p", guardrails: true, detail: "standard", drafts: { p: emptyProjectDraft() } };
+  }
+
+  test("an untouched brief is empty in every mode", () => {
+    for (const mode of ["new-screen", "reference", "refine", "qa"] as const) {
+      expect(isBriefEmpty(draftFor(mode))).toBe(true);
+    }
+  });
+
+  test("one meaningful field is enough to stop being empty", () => {
+    const draft = draftFor("new-screen");
+    draft.drafts.p.newScreen.primaryGoal = "book a ticket";
+    expect(isBriefEmpty(draft)).toBe(false);
+  });
+
+  test("whitespace is not content", () => {
+    const draft = draftFor("qa");
+    draft.drafts.p.qa.frameName = "   ";
+    expect(isBriefEmpty(draft)).toBe(true);
+  });
+
+  test("selected QA categories alone do not make a usable brief", () => {
+    const draft = draftFor("qa");
+    expect(draft.drafts.p.qa.categories.length).toBeGreaterThan(0);
+    expect(isBriefEmpty(draft)).toBe(true);
+  });
+});
+
+describe("focused mode compression", () => {
+  test("focused is 40-60% below standard for a typical brief", () => {
+    const project = typicalProject();
+    const standard = words(compileNewScreen(typicalBrief(), ctx({ project })));
+    const focused = words(compileNewScreen(typicalBrief(), ctx({ project, detail: "focused" })));
+    const cut = 1 - focused / standard;
+    expect(cut).toBeGreaterThanOrEqual(0.4);
+    expect(cut).toBeLessThanOrEqual(0.6);
+  });
+
+  test("focused still carries objective, hierarchy, structure and constraints", () => {
+    const focused = compileNewScreen(sampleNewScreenBrief(), ctx({ detail: "focused" }));
+    for (const required of [
+      "SCREEN OBJECTIVE",
+      "SCREEN STRUCTURE",
+      "INFORMATION HIERARCHY",
+      "Forecast grid",
+      "Adjust assumptions",
+      "Do not open the screen with a row of stat tiles",
+      "4 / 8 / 16 / 24 / 32 / 48 / 64 / 96",
+    ]) {
+      expect(focused).toContain(required);
+    }
+  });
+
+  test("focused keeps preservation rules in refine mode", () => {
+    const brief = {
+      ...emptyRefine(),
+      frameName: "Home",
+      areaBeingChanged: "the header",
+      currentProblem: "misaligned",
+    };
+    const focused = compileRefineExisting(brief, ctx({ detail: "focused" }));
+    expect(focused).toContain("Refine the selected area only.");
+    expect(focused).toContain("Do not redesign the page.");
+  });
+});
+
+describe("interaction states", () => {
+  test("only the selected states reach the prompt, and all of them do", () => {
+    const brief = { ...sampleNewScreenBrief(), states: ["Focus", "Empty", "Success"] };
+    const prompt = compileNewScreen(brief, ctx());
+    expect(prompt).toContain("Focus —");
+    expect(prompt).toContain("Empty —");
+    expect(prompt).toContain("Success —");
+    expect(prompt).not.toContain("Disabled —");
+    expect(prompt).not.toContain("Hover —");
+  });
+
+  test("every option in the picker has prompt copy behind it", () => {
+    const all = ["Default", "Hover", "Focus", "Active", "Selected", "Disabled", "Loading", "Empty", "Error", "Success"];
+    const prompt = compileNewScreen({ ...sampleNewScreenBrief(), states: all }, ctx());
+    for (const state of all) expect(prompt).toMatch(new RegExp(`${state}(/\\w+)? —`));
+  });
+});
+
+describe("language", () => {
+  test("no reference is assumed when none was supplied", () => {
+    const prompt = compileNewScreen({ ...sampleNewScreenBrief(), referenceNotes: "" }, ctx());
+    expect(prompt).not.toMatch(/\bthe (supplied |attached |provided )?(reference|screenshot|mockup)\b/i);
+  });
+
+  test("grammar slips stay fixed", () => {
+    const prompt = compileNewScreen(sampleNewScreenBrief(), ctx());
+    expect(prompt).not.toContain("not a instruction");
+    expect(prompt).toContain("not an instruction");
   });
 });

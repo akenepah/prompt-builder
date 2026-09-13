@@ -228,13 +228,13 @@ function ProjectEditor({
           label="Heading typeface"
           value={project.headingTypeface}
           onChange={(headingTypeface) => onChange({ headingTypeface })}
-          placeholder="Inter, 600. Scale 32 / 24 / 20 / 16"
+          placeholder="Typeface, weight and size scale"
         />
         <TextInput
           label="Body / UI typeface"
           value={project.bodyTypeface}
           onChange={(bodyTypeface) => onChange({ bodyTypeface })}
-          placeholder="Inter 400/500 — body 15/24"
+          placeholder="Typeface, weights and body size"
         />
         <ColorTokenBuilder colors={project.colors} onChange={(colors) => onChange({ colors })} />
       </Collapsible>

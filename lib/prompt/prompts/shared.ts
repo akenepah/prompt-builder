@@ -169,8 +169,10 @@ export function productContextBody(context: PromptContext): string {
 
   return lines(
     filled(project.productDescription) && `Product: ${asSentence(project.productDescription)}`,
-    filled(project.primaryUsers) && `Who uses it: ${asSentence(project.primaryUsers)}`,
-    filled(project.brandDirection) && `Experience direction: ${asSentence(project.brandDirection)}`,
+    atLeast(detail, "standard") && filled(project.primaryUsers) ? `Who uses it: ${asSentence(project.primaryUsers)}` : "",
+    atLeast(detail, "standard") && filled(project.brandDirection)
+      ? `Experience direction: ${asSentence(project.brandDirection)}`
+      : "",
   );
 }
 
@@ -211,14 +213,19 @@ export function designSystemBody(context: PromptContext): string {
     filled(project.imagery) && `Imagery: ${asSentence(project.imagery)}`,
   );
 
+  const compact = !atLeast(detail, "standard");
+
   return paragraphs(
     type && `Typography\n${type}`,
-    colors.length > 0 && `Color — use these tokens only\n${bullets(colors)}`,
+    colors.length > 0 &&
+      (compact
+        ? `Color — use these tokens only: ${colors.map((entry) => entry.split(" — ")[0]).join(", ")}`
+        : `Color — use these tokens only\n${bullets(colors)}`),
     filled(project.spacingScale) && `Spacing — every margin, padding and gap comes from this scale, no one-off values\n${project.spacingScale}`,
     layout && `Grid\n${layout}`,
     surfaces && `Surfaces and components\n${surfaces}`,
     filled(project.permanentRules) && `Standing rules\n${bullets(toItems(project.permanentRules))}`,
-    "Where this brief appears to conflict with these rules, the design system wins.",
+    explain(detail, "Where this brief appears to conflict with these rules, the design system wins."),
     deep(
       detail,
       "Build with real components and Auto Layout so these rules hold when content length changes, rather than styling each instance by hand.",
@@ -235,7 +242,10 @@ export function designSystemBody(context: PromptContext): string {
  * Forbidding both produces a screen full of empty labels, so the rule
  * has to draw the line explicitly.
  */
-export function contentHonestyBody(): string {
+export function contentHonestyBody(detail: DetailLevel = "standard"): string {
+  if (!atLeast(detail, "standard")) {
+    return "Invent no facts — no statistics, prices, customer counts, testimonials, logos or product capabilities that were not supplied. Do write the interface copy the screen needs (labels, helper text, validation, empty states) without asserting anything unsupplied. No lorem ipsum.";
+  }
   return paragraphs(
     "Treat the supplied content as the only source of fact. Invent no statistics, metrics, prices, customer counts, testimonials, company or customer names, logos, awards, integrations or claims about what the product can do. Where a figure is needed and has not been supplied, use an obvious placeholder rather than a plausible invention.",
     "Do write the interface copy the screen needs — button and link labels, headings, field labels, helper text, validation messages, empty-state guidance and confirmations — short, specific, in the product's voice, and never asserting a capability or fact that was not supplied. Never use lorem ipsum.",
@@ -269,15 +279,20 @@ export function accessibilityBody(context: PromptContext, extra?: string): strin
     );
   }
 
-  const base = [
-    "Body text meets at least 4.5:1 contrast, large text and meaningful icons at least 3:1.",
-    "Every interactive element has a visible focus state that does not rely on color alone.",
-    "Touch hit areas are at least 44×44px. Where a control's specified visual size is smaller, keep the visual size and extend the hit area with padding — do not enlarge the visible control.",
-    "Never use color alone to carry meaning.",
-    ...(atLeast(detail, "comprehensive")
-      ? ["Headings follow a sensible order and labels sit with their inputs, so the screen reads correctly top to bottom."]
-      : []),
-  ];
+  const base = atLeast(detail, "standard")
+    ? [
+        "Body text meets at least 4.5:1 contrast, large text and meaningful icons at least 3:1.",
+        "Every interactive element has a visible focus state that does not rely on color alone.",
+        "Touch hit areas are at least 44×44px. Where a control's specified visual size is smaller, keep the visual size and extend the hit area with padding — do not enlarge the visible control.",
+        "Never use color alone to carry meaning.",
+        ...(atLeast(detail, "comprehensive")
+          ? ["Headings follow a sensible order and labels sit with their inputs, so the screen reads correctly top to bottom."]
+          : []),
+      ]
+    : [
+        "Body text meets 4.5:1 contrast; every interactive element has a visible focus state.",
+        "Touch hit areas at least 44×44px, extended with padding rather than by resizing the visible control.",
+      ];
   return paragraphs(bullets([...projectRules, ...base]), filled(extra) ? asSentence(clean(extra)) : "");
 }
 
@@ -333,7 +348,11 @@ export function guardrailsBody(context: PromptContext): string {
   if (!guardrails) return projectDoNots.length > 0 ? bullets(projectDoNots) : "";
   if (contextMode === "guidelines") return "";
 
-  const avoid = atLeast(detail, "comprehensive") ? GUARDRAIL_AVOID : GUARDRAIL_AVOID.slice(0, 5);
+  const avoid = atLeast(detail, "comprehensive")
+    ? GUARDRAIL_AVOID
+    : atLeast(detail, "standard")
+      ? GUARDRAIL_AVOID.slice(0, 5)
+      : GUARDRAIL_AVOID.slice(0, 4);
   return paragraphs(
     projectDoNots.length > 0 ? bullets(projectDoNots) : "",
     `This must not read as generic AI-generated UI. Avoid:\n${bullets(avoid)}`,
@@ -398,6 +417,12 @@ const STATE_SHORT: Record<string, string> = {
 
 export function statesBody(states: string[], notes: string, detail: DetailLevel): string {
   if (states.length === 0) return filled(notes) ? asSentence(clean(notes)) : "";
+  if (!atLeast(detail, "standard")) {
+    return paragraphs(
+      filled(notes) ? asSentence(clean(notes)) : "",
+      `Design these states explicitly: ${sentenceList(states).toLowerCase()}.`,
+    );
+  }
   const copy = states.map((state) =>
     atLeast(detail, "comprehensive") ? (STATE_COPY[state] ?? state) : (STATE_SHORT[state] ?? state),
   );
@@ -412,9 +437,12 @@ export function statesBody(states: string[], notes: string, detail: DetailLevel)
 /* ------------------------------------------------------------------ */
 
 export function executionOrderBody(detail: DetailLevel): string {
+  if (!atLeast(detail, "standard")) {
+    return "Establish structure, grid, hierarchy and responsive composition before decorative polish, then apply the visual system. Still produce the finished screen in one pass.";
+  }
   return lines(
     "Establish the page structure, grid, information hierarchy, section relationships and responsive composition before spending effort on decorative polish. Structure is the hardest thing to correct later. Once the foundation is coherent, apply the visual system and interaction detail.",
-    explain(detail, "Produce the finished screen in one pass — this is the order to reason and work in, not a instruction to stop early."),
+    "Produce the finished screen in one pass — this is the order to reason and work in, not an instruction to stop early.",
   );
 }
 
@@ -445,6 +473,6 @@ export function finalReviewBody(detail: DetailLevel): string {
     "Check your own output before finishing:",
     numbered(questions),
     "",
-    "Fix what these expose rather than noting it. Where removing something improves the design, remove it.",
+    explain(detail, "Fix what these expose rather than noting it. Where removing something improves the design, remove it."),
   );
 }

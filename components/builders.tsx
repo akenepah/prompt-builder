@@ -20,6 +20,19 @@ export function move<T>(items: T[], index: number, direction: -1 | 1): T[] {
   return next;
 }
 
+/**
+ * Accepts the forms a design system actually uses — hex, rgb/rgba,
+ * hsl/hsla, a CSS variable, or a plain keyword. Anything else is flagged
+ * rather than silently written into a prompt as if it were a color.
+ */
+const COLOR_VALUE =
+  /^(#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})|(rgb|hsl)a?\([^)]+\)|var\(--[\w-]+\)|[a-z]+)$/i;
+
+export function isValidColorValue(value: string): boolean {
+  const text = value.trim();
+  return text === "" || COLOR_VALUE.test(text);
+}
+
 const ROW_INPUT =
   "w-full rounded border border-fpb-line-strong bg-fpb-panel px-2 py-1.5 text-[13px] text-fpb-ink placeholder:text-fpb-faint transition-colors hover:border-fpb-faint";
 
@@ -221,13 +234,15 @@ export function ColorTokenBuilder({
         <span className="flex-1">Purpose</span>
         <span className="w-[104px]" />
       </div>
-      {colors.map((token, index) => (
-        <div key={token.id} className="flex flex-col gap-2 sm:flex-row sm:items-center">
+      {colors.map((token, index) => {
+        const invalid = !isValidColorValue(token.value);
+        return (
+        <div key={token.id} className="flex flex-col gap-2 sm:flex-row sm:items-start">
           <div className="flex items-center gap-2 sm:w-[28%]">
             <span
               aria-hidden
               className="h-5 w-5 shrink-0 rounded border border-fpb-line-strong"
-              style={{ background: /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(token.value.trim()) ? token.value.trim() : "transparent" }}
+              style={{ background: invalid || !token.value.trim() ? "transparent" : token.value.trim() }}
             />
             <input
               value={token.name}
@@ -237,13 +252,22 @@ export function ColorTokenBuilder({
               className={ROW_INPUT}
             />
           </div>
-          <input
-            value={token.value}
-            onChange={(event) => update(index, { value: event.target.value })}
-            placeholder="#000000"
-            aria-label={`Color ${index + 1} value`}
-            className={`${ROW_INPUT} sm:w-[24%]`}
-          />
+          <div className="sm:w-[24%]">
+            <input
+              value={token.value}
+              onChange={(event) => update(index, { value: event.target.value })}
+              placeholder="#000000"
+              aria-label={`Color ${index + 1} value`}
+              aria-invalid={invalid || undefined}
+              aria-describedby={invalid ? `${token.id}-invalid` : undefined}
+              className={`${ROW_INPUT} ${invalid ? "border-fpb-danger" : ""}`}
+            />
+            {invalid ? (
+              <p id={`${token.id}-invalid`} className="mt-1 text-[11.5px] leading-[1.4] text-fpb-danger">
+                Not a color value. Use a hex, rgb(), hsl(), var() or a CSS keyword.
+              </p>
+            ) : null}
+          </div>
           <input
             value={token.purpose}
             onChange={(event) => update(index, { purpose: event.target.value })}
@@ -259,7 +283,8 @@ export function ColorTokenBuilder({
             onRemove={() => onChange(colors.filter((_, i) => i !== index))}
           />
         </div>
-      ))}
+        );
+      })}
       <div>
         <Button
           size="sm"

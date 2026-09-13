@@ -8,9 +8,10 @@
  * recognising the ALL-CAPS section headings the compilers emit.
  */
 
-import { Check, Copy } from "lucide-react";
+import { AlertTriangle, Check, Copy } from "lucide-react";
 import { useMemo } from "react";
 import { CONTEXT_MODES, DETAIL_LEVELS, MODES } from "@/lib/prompt/options";
+import type { Conflict } from "@/lib/prompt/conflicts";
 import type { ContextMode, DetailLevel, PromptMode, Readiness } from "@/lib/prompt/types";
 import { Button, InlineSelect } from "./ui";
 
@@ -53,6 +54,8 @@ export function PromptPanel({
   detail,
   onContextModeChange,
   onDetailChange,
+  conflicts,
+  projectName,
 }: {
   prompt: string;
   readiness: Readiness;
@@ -63,6 +66,8 @@ export function PromptPanel({
   detail: DetailLevel;
   onContextModeChange: (mode: ContextMode) => void;
   onDetailChange: (detail: DetailLevel) => void;
+  conflicts: Conflict[];
+  projectName: string;
 }) {
   const blocks = useMemo(() => prompt.split("\n"), [prompt]);
   const words = useMemo(() => (prompt.trim() ? prompt.trim().split(/\s+/).length : 0), [prompt]);
@@ -96,6 +101,23 @@ export function PromptPanel({
         <InlineSelect label="Prompt detail" value={detail} options={DETAIL_LEVELS} onChange={onDetailChange} />
       </div>
 
+      {conflicts.length > 0 ? (
+        <div className="border-b border-fpb-line bg-[#fdf6ec] px-4 py-3 md:px-6">
+          <p className="flex items-center gap-1.5 text-[11.5px] font-semibold uppercase tracking-[0.05em] text-fpb-warn">
+            <AlertTriangle aria-hidden className="h-3.5 w-3.5" />
+            {conflicts.length === 1 ? "Conflict with this project" : `${conflicts.length} conflicts with this project`}
+          </p>
+          <ul className="mt-1.5 flex flex-col gap-1.5">
+            {conflicts.map((conflict) => (
+              <li key={conflict.id} className="text-[12.5px] leading-[1.5] text-fpb-ink">
+                <span className="font-medium">{conflict.title}.</span>{" "}
+                <span className="text-fpb-muted">{conflict.detail}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       {readiness.suggestions.length > 0 ? (
         <div className="border-b border-fpb-line bg-fpb-inset/70 px-4 py-2.5 md:px-6">
           <p className="text-[11.5px] font-medium uppercase tracking-[0.05em] text-fpb-faint">To strengthen this prompt</p>
@@ -128,9 +150,16 @@ export function PromptPanel({
             })}
           </div>
         ) : (
-          <p className="max-w-[46ch] text-[13px] leading-[1.6] text-fpb-faint">
-            Fill in the brief on the left. The prompt is generated as you type — there is nothing to submit.
-          </p>
+          <div className="max-w-[52ch]">
+            <p className="text-[13px] leading-[1.6] text-fpb-muted">
+              Nothing to generate yet{projectName ? ` for ${projectName}` : ""}.
+            </p>
+            <p className="mt-2 text-[13px] leading-[1.6] text-fpb-faint">
+              Fill in the brief on the left and the prompt appears here as you type — there is nothing to submit. A
+              prompt built from project rules alone would not describe your screen, so Copy and Save stay disabled
+              until the brief says something.
+            </p>
+          </div>
         )}
       </div>
     </div>

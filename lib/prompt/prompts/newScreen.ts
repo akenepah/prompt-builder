@@ -163,6 +163,15 @@ function structure(brief: NewScreenBrief, context: PromptContext): string {
 
   const written = sections.map((entry, index) => {
     const title = filled(entry.name) ? clean(entry.name) : `Section ${index + 1}`;
+    if (!atLeast(detail, "standard")) {
+      const parts = [
+        filled(entry.purpose) && clean(entry.purpose),
+        filled(entry.content) && `Content: ${clean(entry.content)}`,
+        filled(entry.primaryAction) && `Action: ${clean(entry.primaryAction)}`,
+        filled(entry.notes) && clean(entry.notes),
+      ].filter(Boolean);
+      return `${index + 1}. ${title}${parts.length ? ` — ${parts.join(". ")}` : ""}`;
+    }
     return lines(
       `${index + 1}. ${title}`,
       filled(entry.purpose) && `   Purpose: ${asSentence(clean(entry.purpose))}`,
@@ -203,14 +212,16 @@ function content(brief: NewScreenBrief, context: PromptContext): string {
     filled(brief.requiredContent) ? `This content must appear:\n${bullets(toItems(brief.requiredContent))}` : "",
     filled(brief.primaryCta)
       ? lines(
-          `Primary action: "${clean(brief.primaryCta)}" — visible without scrolling, labelled identically everywhere it appears.`,
+          atLeast(detail, "standard")
+            ? `Primary action: "${clean(brief.primaryCta)}" — visible without scrolling, labelled identically everywhere it appears.`
+            : `Primary action: "${clean(brief.primaryCta)}" — the most prominent interactive element.`,
           explain(detail, PRIMARY_ACTION_RULE),
         )
       : explain(detail, PRIMARY_ACTION_RULE),
     filled(brief.secondaryCta)
       ? `Secondary action: "${clean(brief.secondaryCta)}" — clearly subordinate to the primary action through weight, not only color.`
       : "",
-    contentHonestyBody(),
+    contentHonestyBody(detail),
   );
 }
 

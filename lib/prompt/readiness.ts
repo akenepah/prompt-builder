@@ -8,6 +8,8 @@
  * optional and is never nagged about.
  */
 
+import { hasCriticalConflict, type Conflict } from "./conflicts";
+import { projectDraft } from "./prompts";
 import type { Draft, ProjectProfile, Readiness } from "./types";
 
 const LABELS: Record<Readiness["level"], string> = {
@@ -56,10 +58,29 @@ function evaluate(signals: Signal[]): Readiness {
   };
 }
 
-export function evaluateReadiness(draft: Draft, project: ProjectProfile | null): Readiness {
+export function evaluateReadiness(
+  draft: Draft,
+  project: ProjectProfile | null,
+  conflicts: Conflict[] = [],
+): Readiness {
+  const readiness = scoreReadiness(draft, project);
+
+  /*
+   * A brief can be complete and still wrong — written against another
+   * project, or asking for something the profile forbids. Reporting that
+   * as "Strong" is the misleading state this guard exists to prevent.
+   */
+  if (hasCriticalConflict(conflicts) && readiness.level === "strong") {
+    return { ...readiness, level: "good", label: LABELS.good };
+  }
+  return readiness;
+}
+
+function scoreReadiness(draft: Draft, project: ProjectProfile | null): Readiness {
+  const current = projectDraft(draft);
   switch (draft.mode) {
     case "new-screen": {
-      const brief = draft.newScreen;
+      const brief = current.newScreen;
       const sectionsFilled = brief.sections.filter((entry) => has(entry.name) && (has(entry.purpose) || has(entry.content)));
       return evaluate([
         {
@@ -97,7 +118,7 @@ export function evaluateReadiness(draft: Draft, project: ProjectProfile | null):
     }
 
     case "reference": {
-      const brief = draft.reference;
+      const brief = current.reference;
       return evaluate([
         {
           present: has(brief.targetScreen) || has(brief.whatWeAreCreating),
@@ -129,7 +150,7 @@ export function evaluateReadiness(draft: Draft, project: ProjectProfile | null):
     }
 
     case "refine": {
-      const brief = draft.refine;
+      const brief = current.refine;
       return evaluate([
         {
           present: has(brief.frameName) || has(brief.areaBeingChanged),
@@ -161,7 +182,7 @@ export function evaluateReadiness(draft: Draft, project: ProjectProfile | null):
     }
 
     case "qa": {
-      const brief = draft.qa;
+      const brief = current.qa;
       return evaluate([
         {
           present: has(brief.frameName),

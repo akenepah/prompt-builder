@@ -10,8 +10,9 @@
 
 import { Check, Copy } from "lucide-react";
 import { useMemo } from "react";
-import type { Readiness } from "@/lib/prompt/types";
-import { Button } from "./ui";
+import { CONTEXT_MODES, DETAIL_LEVELS, MODES } from "@/lib/prompt/options";
+import type { ContextMode, DetailLevel, PromptMode, Readiness } from "@/lib/prompt/types";
+import { Button, InlineSelect } from "./ui";
 
 const HEADING = /^[A-Z][A-Z0-9 ,'’&/—–-]{2,60}$/;
 
@@ -47,11 +48,21 @@ export function PromptPanel({
   readiness,
   copied,
   onCopy,
+  mode,
+  contextMode,
+  detail,
+  onContextModeChange,
+  onDetailChange,
 }: {
   prompt: string;
   readiness: Readiness;
   copied: boolean;
   onCopy: () => void;
+  mode: PromptMode;
+  contextMode: ContextMode;
+  detail: DetailLevel;
+  onContextModeChange: (mode: ContextMode) => void;
+  onDetailChange: (detail: DetailLevel) => void;
 }) {
   const blocks = useMemo(() => prompt.split("\n"), [prompt]);
   const words = useMemo(() => (prompt.trim() ? prompt.trim().split(/\s+/).length : 0), [prompt]);
@@ -71,6 +82,19 @@ export function PromptPanel({
           </Button>
         </div>
       </header>
+
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-fpb-line px-4 py-1.5 text-[12px] text-fpb-muted md:px-6">
+        <span className="font-medium text-fpb-ink">{MODES.find((entry) => entry.id === mode)?.label}</span>
+        <span aria-hidden className="text-fpb-faint">·</span>
+        <InlineSelect
+          label="Project context"
+          value={contextMode}
+          options={CONTEXT_MODES}
+          onChange={onContextModeChange}
+        />
+        <span aria-hidden className="text-fpb-faint">·</span>
+        <InlineSelect label="Prompt detail" value={detail} options={DETAIL_LEVELS} onChange={onDetailChange} />
+      </div>
 
       {readiness.suggestions.length > 0 ? (
         <div className="border-b border-fpb-line bg-fpb-inset/70 px-4 py-2.5 md:px-6">

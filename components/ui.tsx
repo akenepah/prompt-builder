@@ -446,3 +446,41 @@ export function Modal({
     </div>
   );
 }
+
+
+/**
+ * A select that reads as inline metadata rather than a form control —
+ * used for the prompt header, where the current value is information and
+ * changing it is a secondary action.
+ */
+export function InlineSelect<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: Array<{ id: T; label: string; hint?: string }>;
+  onChange: (value: T) => void;
+}) {
+  const active = options.find((option) => option.id === value);
+  return (
+    <span className="relative inline-flex items-center">
+      <select
+        aria-label={label}
+        title={active?.hint}
+        value={value}
+        onChange={(event) => onChange(event.target.value as T)}
+        className="cursor-pointer appearance-none rounded border border-transparent bg-transparent py-0.5 pl-1 pr-4 text-[12px] text-fpb-muted transition-colors hover:border-fpb-line-strong hover:text-fpb-ink"
+      >
+        {options.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <ChevronDown aria-hidden className="pointer-events-none absolute right-0.5 h-3 w-3 text-fpb-faint" />
+    </span>
+  );
+}

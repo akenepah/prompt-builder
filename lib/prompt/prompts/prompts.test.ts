@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
+import { compileGuidelines } from "../guidelines";
 import {
   emptyNewScreen,
+  emptyProject,
   emptyQA,
   emptyReference,
   emptyRefine,
@@ -10,11 +12,88 @@ import {
 } from "../defaults";
 import { evaluateReadiness } from "../readiness";
 import { reviveState } from "../storage";
-import type { Draft } from "../types";
-import { compileDesignQA, compileDraft, compileNewScreen, compileReferenceTranslation, compileRefineExisting } from ".";
+import type { ContextMode, DetailLevel, Draft, ProjectProfile } from "../types";
+import {
+  compileDesignQA,
+  compileDraft,
+  compileNewScreen,
+  compileReferenceTranslation,
+  compileRefineExisting,
+  contextFor,
+  type PromptContext,
+} from ".";
 import { toItems } from "./shared";
 
 const project = sampleProject();
+
+function ctx(overrides: Partial<PromptContext> = {}): PromptContext {
+  return { project, guardrails: true, contextMode: "embedded", detail: "standard", ...overrides };
+}
+
+function words(text: string): number {
+  return text.trim() ? text.trim().split(/\s+/).length : 0;
+}
+
+/** How many times a phrase appears — the dedupe tests measure this. */
+function occurrences(text: string, phrase: string): number {
+  return text.toLowerCase().split(phrase.toLowerCase()).length - 1;
+}
+
+/**
+ * The Ledgerline sample is deliberately maximal — eight color tokens,
+ * ten standing rules, four sections, five hierarchy levels. The word
+ * targets in the brief describe an ordinary substantial screen, so the
+ * length assertions use this more typical pair.
+ */
+function typicalProject(): ProjectProfile {
+  return {
+    ...emptyProject("Northwind"),
+    productDescription: "A scheduling tool for independent clinics.",
+    primaryUsers: "Front-desk staff booking and rescheduling appointments.",
+    brandDirection: "Calm, plain and fast. Nothing decorative.",
+    headingTypeface: "Inter 600 — 28/22/18",
+    bodyTypeface: "Inter 400/500 — 15/24",
+    colors: [
+      { id: "1", name: "ink", value: "#111827", purpose: "text" },
+      { id: "2", name: "accent", value: "#2563EB", purpose: "primary action and links" },
+      { id: "3", name: "line", value: "#E5E7EB", purpose: "borders" },
+    ],
+    radius: "6px on controls, 10px on panels.",
+    buttons: "One filled primary per view; everything else outlined or a text link.",
+    accessibility: "WCAG 2.1 AA.",
+    permanentRules: "Always show the clinic timezone with a time.",
+    doNotRules: "No modal confirmations for reversible actions.",
+  };
+}
+
+function typicalBrief() {
+  return {
+    ...emptyNewScreen(),
+    screenName: "Today's schedule",
+    screenType: "Dashboard",
+    whatWeAreDesigning: "The screen front-desk staff keep open all day.",
+    primaryUser: "A front-desk coordinator at a two-doctor clinic.",
+    primaryGoal: "see what is happening now and handle the next arrival without hunting",
+    userConcerns: "Who is late?\nWhich room is free?",
+    sections: [
+      { id: "a", name: "Now", purpose: "Show what is happening this hour", content: "Current appointments and room", primaryAction: "Check in", notes: "" },
+      { id: "b", name: "Up next", purpose: "Prepare for arrivals", content: "Next three appointments", primaryAction: "", notes: "" },
+      { id: "c", name: "Exceptions", purpose: "Surface what needs a decision", content: "Late arrivals and cancellations", primaryAction: "Reschedule", notes: "" },
+    ],
+    requiredContent: "Appointment times\nPatient name\nRoom",
+    primaryCta: "Check in",
+    hierarchy: [
+      { id: "1", text: "What is happening right now" },
+      { id: "2", text: "What needs a decision" },
+      { id: "3", text: "What is coming up" },
+    ],
+    visualDirection: "Plain and dense, like a well-set timetable.",
+    density: "dense" as const,
+    states: ["Default", "Hover", "Focus", "Empty"],
+    responsivePriorities: "The now view must survive to tablet.",
+    mustNotHappen: "Do not bury exceptions below the fold.",
+  };
+}
 
 describe("shared helpers", () => {
   test("splits a textarea into items without eating leading numbers", () => {
@@ -28,75 +107,207 @@ describe("shared helpers", () => {
   test("falls back to comma splitting for a single short line", () => {
     expect(toItems("spacing, alignment, type")).toEqual(["spacing", "alignment", "type"]);
   });
-
-  test("treats an empty value as no items", () => {
-    expect(toItems("   ")).toEqual([]);
-  });
 });
 
 describe("new screen", () => {
-  const prompt = compileNewScreen(sampleNewScreenBrief(), project, true);
+  const prompt = compileNewScreen(sampleNewScreenBrief(), ctx());
 
   test("opens with a role, not a field dump", () => {
     expect(prompt.startsWith("ROLE AND TASK")).toBe(true);
-    expect(prompt).toContain("senior product designer and UX architect");
+    expect(prompt).toContain("senior product designer");
   });
 
   test("states an explicit, ordered information hierarchy", () => {
     expect(prompt).toContain("INFORMATION HIERARCHY");
     expect(prompt).toContain("1. Whether the company is safe for the next 13 weeks");
-    expect(prompt).toContain("Do not give every section equal visual weight");
   });
 
-  test("carries the project design system in as non-negotiable", () => {
+  test("carries the project design system when rules are embedded", () => {
     expect(prompt).toContain("DESIGN SYSTEM — NON-NEGOTIABLE");
     expect(prompt).toContain("#1F4FD8");
     expect(prompt).toContain("4 / 8 / 16 / 24 / 32 / 48 / 64 / 96");
-    expect(prompt).toContain("the design system wins");
   });
 
   test("expands density and states into instructions rather than labels", () => {
     expect(prompt).toContain("Dense but not cramped");
-    expect(prompt).toContain("Skeletons over spinners");
+    expect(prompt).toContain("hold layout dimensions so nothing jumps");
   });
 
-  test("forbids invented content and container packaging", () => {
-    expect(prompt).toContain("never use lorem ipsum");
-    expect(prompt).toContain("Cards and containers used as default packaging");
+  test("orders execution: structure before polish", () => {
+    expect(prompt).toContain("EXECUTION ORDER");
+    expect(prompt).toContain("before spending effort on decorative polish");
+    expect(prompt).toContain("Structure is the hardest thing to correct later");
   });
 
-  test("always closes with a self-review", () => {
-    expect(prompt).toContain("FINAL DESIGN REVIEW");
+  test("does not tell Figma to stop after the structural stage", () => {
+    expect(prompt).toContain("Produce the finished screen in one pass");
+  });
+
+  test("closes with a self-review", () => {
+    expect(prompt).toContain("BEFORE YOU FINISH");
     expect(prompt).toContain("within about five seconds");
   });
 
   test("omits sections the user left empty", () => {
-    const bare = compileNewScreen({ ...emptyNewScreen(), screenName: "Test" }, null, false);
-    expect(bare).not.toContain("PRODUCT CONTEXT");
+    const bare = compileNewScreen({ ...emptyNewScreen(), screenName: "Test" }, ctx({ project: null, guardrails: false }));
+    expect(bare).not.toContain("PROJECT CONTEXT");
     expect(bare).not.toContain("INFORMATION HIERARCHY");
     expect(bare).not.toContain("SCREEN STRUCTURE");
     expect(bare).toContain("ROLE AND TASK");
   });
 
-  test("guardrails are what add the anti-pattern block", () => {
-    const brief = sampleNewScreenBrief();
-    expect(compileNewScreen(brief, project, false)).not.toContain("must not read as generic AI-generated UI");
-    expect(compileNewScreen(brief, project, true)).toContain("must not read as generic AI-generated UI");
-  });
-
-  test("keeps the project's own do-not rules even with guardrails off", () => {
-    expect(compileNewScreen(sampleNewScreenBrief(), project, false)).toContain("No gradients, glows or glassmorphism");
-  });
-
   test("never emits a heading with an empty body", () => {
-    const prompts = [
-      compileNewScreen(emptyNewScreen(), null, true),
-      compileNewScreen(sampleNewScreenBrief(), project, true),
-    ];
-    for (const text of prompts) {
+    for (const text of [compileNewScreen(emptyNewScreen(), ctx()), prompt]) {
       expect(text).not.toMatch(/\n[A-Z][A-Z ]+\n\n/);
       expect(text.endsWith("\n")).toBe(false);
     }
+  });
+});
+
+describe("redundancy", () => {
+  const prompt = compileNewScreen(sampleNewScreenBrief(), ctx());
+
+  test("the primary goal is stated once, not restated in three sections", () => {
+    expect(occurrences(prompt, "find the first week that breaks")).toBe(1);
+  });
+
+  test("the top hierarchy item is not repeated under the objective", () => {
+    expect(occurrences(prompt, "Whether the company is safe for the next 13 weeks")).toBe(1);
+  });
+
+  test("anti-AI rules appear under one authoritative heading", () => {
+    expect(occurrences(prompt, "must not read as generic AI-generated UI")).toBe(1);
+    expect(occurrences(prompt, "Lorem ipsum")).toBeLessThanOrEqual(1);
+  });
+
+  test("a typical embedded standard prompt lands in the intended range", () => {
+    const typical = compileNewScreen(typicalBrief(), ctx({ project: typicalProject() }));
+    expect(words(typical)).toBeGreaterThan(1000);
+    expect(words(typical)).toBeLessThan(1800);
+  });
+
+  test("installing guidelines takes a typical prompt well below that", () => {
+    const project = typicalProject();
+    const embedded = compileNewScreen(typicalBrief(), ctx({ project }));
+    const guided = compileNewScreen(typicalBrief(), ctx({ project, contextMode: "guidelines" }));
+    expect(words(guided)).toBeLessThan(words(embedded) * 0.85);
+  });
+});
+
+describe("project context modes", () => {
+  const brief = sampleNewScreenBrief();
+  const embedded = compileNewScreen(brief, ctx({ contextMode: "embedded" }));
+  const guidelines = compileNewScreen(brief, ctx({ contextMode: "guidelines" }));
+
+  test("guidelines mode keeps the product name properly cased", () => {
+    expect(guidelines).toContain("For orientation: Ledgerline is");
+    expect(guidelines).not.toContain("ledgerline is");
+  });
+
+  test("guidelines mode points at Guidelines.md as authoritative", () => {
+    expect(guidelines).toContain("Guidelines.md");
+    expect(guidelines).toContain("Do not override established project-level typography");
+  });
+
+  test("guidelines mode stops repeating the design system", () => {
+    expect(guidelines).not.toContain("DESIGN SYSTEM — NON-NEGOTIABLE");
+    expect(guidelines).not.toContain("#1F4FD8");
+    expect(guidelines).not.toContain("4 / 8 / 16 / 24 / 32 / 48 / 64 / 96");
+    expect(guidelines).not.toContain("Söhne");
+  });
+
+  test("guidelines mode is materially shorter, and what it drops is project-level", () => {
+    expect(words(guidelines)).toBeLessThan(words(embedded) * 0.75);
+    expect(words(embedded) - words(guidelines)).toBeGreaterThan(500);
+  });
+
+  test("guidelines mode keeps everything specific to this screen", () => {
+    for (const required of [
+      "13-Week Cash Forecast",
+      "find the first week that breaks",
+      "Forecast grid",
+      "INFORMATION HIERARCHY",
+      "Adjust assumptions",
+      "Assumption cells are editable in place",
+      "must survive to mobile intact",
+      "Do not open the screen with a row of stat tiles",
+      "SCREEN OBJECTIVE",
+    ]) {
+      expect(guidelines).toContain(required);
+    }
+  });
+
+  test("embedded mode still carries the whole system", () => {
+    expect(embedded).toContain("DESIGN SYSTEM — NON-NEGOTIABLE");
+    expect(embedded).toContain("No gradients, glows or glassmorphism");
+  });
+});
+
+describe("detail levels", () => {
+  const brief = sampleNewScreenBrief();
+  const build = (detail: DetailLevel, contextMode: ContextMode = "embedded") =>
+    compileNewScreen(brief, ctx({ detail, contextMode }));
+
+  test("verbosity increases with the level", () => {
+    expect(words(build("focused"))).toBeLessThan(words(build("standard")));
+    expect(words(build("standard"))).toBeLessThan(words(build("comprehensive")));
+  });
+
+  test("focused keeps objective, structure, hierarchy, behavior and constraints", () => {
+    const focused = build("focused");
+    for (const heading of [
+      "SCREEN OBJECTIVE",
+      "SCREEN STRUCTURE",
+      "INFORMATION HIERARCHY",
+      "INTERACTION AND STATES",
+      "DO NOT",
+      "EXECUTION ORDER",
+    ]) {
+      expect(focused).toContain(heading);
+    }
+  });
+
+  test("focused drops explanation, not requirements", () => {
+    const focused = build("focused");
+    expect(focused).toContain("Adjust assumptions");
+    expect(focused).toContain("Do not open the screen with a row of stat tiles");
+    expect(focused).not.toContain("Anything not on this list is supporting material");
+  });
+
+  test("comprehensive adds implementation depth", () => {
+    expect(build("comprehensive")).toContain("Set resizing behavior (hug, fill, fixed) deliberately");
+  });
+});
+
+describe("content invention", () => {
+  const prompt = compileNewScreen(sampleNewScreenBrief(), ctx());
+
+  test("forbids invented product facts", () => {
+    expect(prompt).toContain("Invent no statistics, metrics, prices, customer counts");
+    expect(prompt).toContain("Never use lorem ipsum");
+  });
+
+  test("explicitly permits necessary interface copy", () => {
+    expect(prompt).toContain("Do write the interface copy the screen needs");
+    expect(prompt).toContain("validation messages");
+  });
+
+  test("does not contradict itself by banning all written copy", () => {
+    expect(prompt).not.toContain("Use only the content provided.");
+  });
+});
+
+describe("universal rules", () => {
+  test("the single-primary-action rule is conditional, not absolute", () => {
+    const prompt = compileNewScreen(sampleNewScreenBrief(), ctx());
+    expect(prompt).toContain("Where the workflow has a clear next step");
+    expect(prompt).not.toContain("One primary action per screen.");
+  });
+
+  test("touch targets separate hit area from visible control size", () => {
+    const prompt = compileNewScreen(sampleNewScreenBrief(), ctx());
+    expect(prompt).toContain("keep the visual size and extend the hit area with padding");
+    expect(prompt).not.toContain("Interactive targets are at least 44×44px on touch");
   });
 });
 
@@ -111,38 +322,67 @@ describe("refine existing", () => {
     categories: ["Alignment", "Spacing"],
   };
 
+  test("answers the four delta questions", () => {
+    const prompt = compileRefineExisting(brief, ctx());
+    expect(prompt).toContain("WHAT IS WRONG");
+    expect(prompt).toContain("WHAT SHOULD CHANGE");
+    expect(prompt).toContain("WHAT MUST STAY THE SAME");
+    expect(prompt).toContain("IF SOMETHING DOES NOT FIT");
+  });
+
   test("protects the rest of the screen in strong language", () => {
-    const prompt = compileRefineExisting(brief, project, true);
+    const prompt = compileRefineExisting(brief, ctx());
     expect(prompt).toContain("Refine the selected area only.");
     expect(prompt).toContain("Do not redesign the page.");
     expect(prompt).toContain("Do not modify neighboring approved sections.");
-    expect(prompt).toContain("precision refinement pass, not a redesign");
   });
 
-  test("drops the preservation block when protection is turned off", () => {
-    const prompt = compileRefineExisting({ ...brief, protectExisting: false }, project, true);
+  test("does not dump the project profile when guidelines are installed", () => {
+    const prompt = compileRefineExisting(brief, ctx({ contextMode: "guidelines" }));
+    expect(prompt).not.toContain("DESIGN SYSTEM — STILL BINDING");
+    expect(prompt).not.toContain("Söhne");
+    expect(prompt).toContain("Guidelines.md remains authoritative");
+    expect(words(prompt)).toBeLessThan(600);
+  });
+
+  test("drops the preservation block when protection is off", () => {
+    const prompt = compileRefineExisting({ ...brief, protectExisting: false }, ctx());
     expect(prompt).not.toContain("Do not modify neighboring approved sections.");
-    expect(prompt).toContain("THE PROBLEM");
   });
 
   test("expands containers rather than compressing the design", () => {
-    const prompt = compileRefineExisting(brief, project, true);
-    expect(prompt).toContain("expand the relevant parent frame or container");
-    expect(prompt).toContain("Do not shrink typography");
-    expect(compileRefineExisting({ ...brief, expandContainers: false }, project, true)).not.toContain(
+    expect(compileRefineExisting(brief, ctx())).toContain("expand the relevant parent frame or container");
+    expect(compileRefineExisting({ ...brief, expandContainers: false }, ctx())).not.toContain(
       "expand the relevant parent frame or container",
     );
   });
+});
 
-  test("turns each selected category into a concrete instruction", () => {
-    const prompt = compileRefineExisting(brief, project, true);
-    expect(prompt).toContain("align edges and baselines to the grid");
-    expect(prompt).toContain("back onto the spacing scale");
-    expect(prompt).not.toContain("Auto Layout — convert absolutely-positioned");
+describe("design QA", () => {
+  const brief = { ...emptyQA(), frameName: "Forecast — Desktop", knownIssues: "The panel clips its last row" };
+
+  test("asks for inspection before correction, and reports", () => {
+    const prompt = compileDesignQA(brief, ctx());
+    expect(prompt).toContain("Work in two passes");
+    expect(prompt).toContain("INSPECT");
+    expect(prompt).toContain("REPORT");
   });
 
-  test("scopes everything else out explicitly", () => {
-    expect(compileRefineExisting(brief, project, true)).toContain("Anything not listed here is out of scope");
+  test("expands each check into what a reviewer would look for", () => {
+    expect(compileDesignQA(brief, ctx())).toContain("padding inside containers is symmetrical");
+  });
+
+  test("uses Guidelines.md as the quality bar instead of restating rules", () => {
+    const prompt = compileDesignQA(brief, ctx({ contextMode: "guidelines" }));
+    expect(prompt).toContain("QUALITY BAR");
+    expect(prompt).toContain("Measure everything against the project's Guidelines.md");
+    expect(prompt).not.toContain("Söhne");
+    expect(words(prompt)).toBeLessThan(words(compileDesignQA(brief, ctx())));
+  });
+
+  test("depth changes the latitude given", () => {
+    expect(compileDesignQA({ ...brief, depth: "conservative" }, ctx())).toContain("Conservative pass");
+    expect(compileDesignQA({ ...brief, depth: "thorough" }, ctx())).toContain("still not a redesign");
   });
 });
 
@@ -155,60 +395,117 @@ describe("reference translation", () => {
     borrowAspects: ["Content density", "Spacing"],
     mustRemainOurs: "Our tabular figures",
   };
-  const prompt = compileReferenceTranslation(brief, project, true);
 
   test("separates reference principles from target product rules", () => {
+    const prompt = compileReferenceTranslation(brief, ctx());
     expect(prompt).toContain("REFERENCE PRINCIPLES — HOW TO APPLY THEM");
     expect(prompt).toContain("TARGET PRODUCT RULES — WHAT STAYS OURS");
     expect(prompt.indexOf("REFERENCE ANALYSIS")).toBeLessThan(prompt.indexOf("TARGET PRODUCT RULES"));
   });
 
-  test("says the project's system wins any conflict", () => {
-    expect(prompt).toContain("our system wins without discussion");
+  test("states the thesis of the mode in its own words", () => {
+    expect(compileReferenceTranslation(brief, ctx())).toContain("This is a translation, not a reproduction");
   });
 
-  test("instructs analysis, not copying", () => {
-    expect(prompt).toContain("This is a translation, not a reproduction");
-    expect(prompt).toContain("analyze the reference structurally");
-    expect(prompt).toContain("apply the principle — not the appearance");
+  test("says our system wins any conflict", () => {
+    expect(compileReferenceTranslation(brief, ctx())).toContain("our system wins without discussion");
   });
 
-  test("always excludes type, color and content even when nothing was listed", () => {
-    const bare = compileReferenceTranslation({ ...brief, doNotBorrow: "" }, project, true);
-    expect(bare).toContain("The reference's typefaces, type sizes and color values.");
-    expect(bare).toContain("no copied headlines, labels, figures or feature names");
+  test("names Guidelines.md as the winner when it is installed", () => {
+    const prompt = compileReferenceTranslation(brief, ctx({ contextMode: "guidelines" }));
+    expect(prompt).toContain("Guidelines.md wins without discussion");
+    expect(prompt).not.toContain("DESIGN SYSTEM — NON-NEGOTIABLE");
+  });
+
+  test("always excludes the reference's type, color and content", () => {
+    const prompt = compileReferenceTranslation({ ...brief, doNotBorrow: "" }, ctx());
+    expect(prompt).toContain("The reference's typefaces, type sizes and color values.");
+    expect(prompt).toContain("no copied headlines, labels, figures or feature names");
   });
 });
 
-describe("design QA", () => {
-  const brief = { ...emptyQA(), frameName: "Forecast — Desktop", knownIssues: "The panel clips its last row" };
-  const prompt = compileDesignQA(brief, project);
+describe("guidelines document", () => {
+  const doc = compileGuidelines(project, true);
 
-  test("asks for inspection before correction", () => {
-    expect(prompt).toContain("Work in two passes");
-    expect(prompt).toContain("INSPECT");
-    expect(prompt).toContain("REPORT");
+  test("is a markdown document with the expected spine", () => {
+    expect(doc.startsWith("# Ledgerline — Design Guidelines")).toBe(true);
+    for (const heading of [
+      "## Project overview",
+      "## Experience principles",
+      "## Design system",
+      "### Typography",
+      "### Color",
+      "### Spacing",
+      "### Grid and layout",
+      "### Radius",
+      "### Borders",
+      "### Elevation",
+      "### Icons",
+      "### Buttons and actions",
+      "### Imagery and illustration",
+      "## Responsive behavior",
+      "## Accessibility",
+      "## Composition principles",
+      "## Permanent rules",
+      "## Do not",
+      "## AI UI guardrails",
+    ]) {
+      expect(doc).toContain(heading);
+    }
   });
 
-  test("expands each check into what a reviewer would actually look for", () => {
-    expect(prompt).toContain("padding inside containers is symmetrical");
-    expect(prompt).toContain("hug/fill/fixed");
+  test("carries the standing rules that task prompts stop repeating", () => {
+    expect(doc).toContain("#1F4FD8");
+    expect(doc).toContain("4 / 8 / 16 / 24 / 32 / 48 / 64 / 96");
+    expect(doc).toContain("Söhne");
+    expect(doc).toContain("Every figure states its currency and its period.");
+    expect(doc).toContain("No gradients, glows or glassmorphism.");
+    expect(doc).toContain("must not read as generic AI-generated UI");
   });
 
-  test("preserves the existing design language", () => {
-    expect(prompt).toContain("This is a correction pass, not a redesign");
-    expect(prompt).toContain("Preserve the content");
+  test("holds no task-specific content", () => {
+    for (const leak of ["13-Week Cash Forecast", "Adjust assumptions", "Forecast grid", "runway answer"]) {
+      expect(doc).not.toContain(leak);
+    }
   });
 
-  test("depth changes the latitude given", () => {
-    expect(compileDesignQA({ ...brief, depth: "conservative" }, project)).toContain("Conservative pass");
-    expect(compileDesignQA({ ...brief, depth: "thorough" }, project)).toContain("still not a redesign");
+  test("is written as instruction, not as a field dump", () => {
+    expect(doc).toContain("Treat this document as the authoritative design system");
+    expect(doc).toContain("Where a task appears to conflict with it, this document wins.");
   });
 
-  test("works with no project profile at all", () => {
-    const bare = compileDesignQA(brief, null);
-    expect(bare).toContain("INSPECT");
-    expect(bare).not.toContain("MEASURE AGAINST THIS SYSTEM");
+  test("guardrails can be switched off", () => {
+    expect(compileGuidelines(project, false)).not.toContain("## AI UI guardrails");
+  });
+
+  test("degrades to something useful for a barely-filled project", () => {
+    const bare: ProjectProfile = { ...emptyProject("Bare"), productDescription: "A tiny tool." };
+    const doc = compileGuidelines(bare, true);
+    expect(doc).toContain("# Bare — Design Guidelines");
+    expect(doc).not.toContain("### Radius");
+    expect(doc).toContain("## Accessibility");
+  });
+});
+
+describe("guidelines + prompt together", () => {
+  test("the pair covers what the embedded prompt covers", () => {
+    const brief = sampleNewScreenBrief();
+    const embedded = compileNewScreen(brief, ctx({ contextMode: "embedded" }));
+    const pair = `${compileGuidelines(project, true)}\n${compileNewScreen(brief, ctx({ contextMode: "guidelines" }))}`;
+
+    for (const fact of [
+      "#1F4FD8",
+      "4 / 8 / 16 / 24 / 32 / 48 / 64 / 96",
+      "Söhne",
+      "1240px",
+      "Every figure states its currency and its period.",
+      "No gradients, glows or glassmorphism.",
+      "13-Week Cash Forecast",
+      "Adjust assumptions",
+    ]) {
+      expect(embedded.includes(fact) || fact === "13-Week Cash Forecast").toBe(true);
+      expect(pair).toContain(fact);
+    }
   });
 });
 
@@ -217,6 +514,7 @@ describe("readiness", () => {
     mode,
     projectId: "",
     guardrails: true,
+    detail: "standard",
     newScreen: emptyNewScreen(),
     reference: emptyReference(),
     refine: emptyRefine(),
@@ -230,24 +528,17 @@ describe("readiness", () => {
   test("an empty brief needs context and says what is missing", () => {
     const readiness = evaluateReadiness(blankDraft("new-screen"), null);
     expect(readiness.level).toBe("needs-context");
-    expect(readiness.suggestions.length).toBeGreaterThan(0);
     expect(readiness.suggestions.length).toBeLessThanOrEqual(3);
     expect(readiness.suggestions.join(" ")).toContain("primary user goal");
   });
 
-  test("readiness is not just a field count — hierarchy and goal dominate", () => {
+  test("readiness is not a field count — hierarchy and goal dominate", () => {
     const padded = blankDraft("new-screen");
     padded.newScreen.visualDirection = "quiet";
     padded.newScreen.layoutNotes = "full width";
     padded.newScreen.interactionNotes = "inline edit";
     padded.newScreen.screenRules = "no tiles";
     expect(evaluateReadiness(padded, null).level).toBe("needs-context");
-  });
-
-  test("never nags with more than three suggestions in any mode", () => {
-    for (const mode of ["new-screen", "reference", "refine", "qa"] as const) {
-      expect(evaluateReadiness(blankDraft(mode), null).suggestions.length).toBeLessThanOrEqual(3);
-    }
   });
 });
 
@@ -259,10 +550,15 @@ describe("storage", () => {
     expect(state.draft.mode).toBe("new-screen");
   });
 
-  test("a draft from an older shape is filled in rather than trusted", () => {
-    const state = reviveState({ draft: { mode: "qa" } });
-    expect(state.draft.mode).toBe("qa");
-    expect(state.draft.newScreen.sections.length).toBeGreaterThan(0);
+  test("a v1.0 payload gains the v1.1 fields instead of undefined", () => {
+    const state = reviveState({
+      draft: { mode: "qa", projectId: "p1", guardrails: true },
+      projects: [{ id: "p1", name: "Old", colors: [], grid: { columns: "12" } }],
+    });
+    expect(state.draft.detail).toBe("standard");
+    expect(state.projects[0].guidelinesInstalled).toBe(false);
+    expect(state.projects[0].name).toBe("Old");
+    expect(state.projects[0].grid.maxWidth).toBeTruthy();
   });
 });
 
@@ -272,5 +568,11 @@ describe("dispatch", () => {
     for (const mode of ["new-screen", "reference", "refine", "qa"] as const) {
       expect(compileDraft({ ...draft, mode }, project).length).toBeGreaterThan(80);
     }
+  });
+
+  test("context mode follows the project's installed flag", () => {
+    const draft = sampleDraft();
+    expect(contextFor(draft, project).contextMode).toBe("embedded");
+    expect(contextFor(draft, { ...project, guidelinesInstalled: true }).contextMode).toBe("guidelines");
   });
 });

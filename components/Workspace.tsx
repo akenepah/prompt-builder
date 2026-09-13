@@ -7,7 +7,7 @@
  * on mount — server and first client render must agree.
  */
 
-import { FolderOpen, Plus, RotateCcw, Save, Sparkles } from "lucide-react";
+import { BookOpen, FolderOpen, Plus, RotateCcw, Save, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   emptyNewScreen,
@@ -18,10 +18,12 @@ import {
   sampleNewScreenBrief,
 } from "@/lib/prompt/defaults";
 import { MODES } from "@/lib/prompt/options";
-import { briefFor, compileDraft } from "@/lib/prompt/prompts";
+import { briefFor, compileDraft, contextFor } from "@/lib/prompt/prompts";
 import { evaluateReadiness } from "@/lib/prompt/readiness";
 import { getServerSnapshot, getSnapshot, subscribe, updateState } from "@/lib/prompt/store";
 import type {
+  ContextMode,
+  DetailLevel,
   Draft,
   NewScreenBrief,
   ProjectProfile,
@@ -32,6 +34,7 @@ import type {
   SavedPrompt,
 } from "@/lib/prompt/types";
 import { NewScreenForm, QAForm, ReferenceForm, RefineForm } from "./forms";
+import { GuidelinesModal } from "./GuidelinesModal";
 import { ProjectsModal } from "./ProjectsModal";
 import { PromptPanel, ReadinessPill } from "./PromptPanel";
 import { SavedPromptsModal } from "./SavedPromptsModal";
@@ -84,7 +87,7 @@ export function Workspace() {
   const [copied, setCopied] = useState(false);
   const [toast, setToast] = useState("");
   const [view, setView] = useState<"brief" | "prompt">("brief");
-  const [dialog, setDialog] = useState<"projects" | "saved" | null>(null);
+  const [dialog, setDialog] = useState<"projects" | "saved" | "guidelines" | null>(null);
   const [activeSavedId, setActiveSavedId] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -102,6 +105,7 @@ export function Workspace() {
   const project: ProjectProfile | null =
     projects.find((entry) => entry.id === draft.projectId) ?? projects[0] ?? null;
 
+  const promptContext = useMemo(() => contextFor(draft, project), [draft, project]);
   const prompt = useMemo(() => compileDraft(draft, project), [draft, project]);
   const readiness = useMemo(() => evaluateReadiness(draft, project), [draft, project]);
 
@@ -133,6 +137,28 @@ export function Workspace() {
   const patchQA = useCallback((patch: Partial<QABrief>) => {
     updateState((current) => ({ ...current, draft: { ...current.draft, qa: { ...current.draft.qa, ...patch } } }));
   }, []);
+
+  const patchProject = useCallback((id: string, patch: Partial<ProjectProfile>) => {
+    updateState((current) => ({
+      ...current,
+      projects: current.projects.map((entry) =>
+        entry.id === id ? { ...entry, ...patch, updatedAt: Date.now() } : entry,
+      ),
+    }));
+  }, []);
+
+  /**
+   * The context control and the project's "guidelines installed" state
+   * are the same fact, so there is one source of truth: flipping the
+   * control marks the project, and the status chip reads it back.
+   */
+  const setContextMode = useCallback(
+    (mode: ContextMode) => {
+      if (!project) return;
+      patchProject(project.id, { guidelinesInstalled: mode === "guidelines" });
+    },
+    [patchProject, project],
+  );
 
   const handleCopy = useCallback(async () => {
     if (!prompt.trim()) return;
@@ -197,6 +223,8 @@ export function Workspace() {
       createdAt: now,
       updatedAt: now,
       guardrails: draft.guardrails,
+      detail: draft.detail,
+      contextMode: promptContext.contextMode,
       brief: structuredClone(briefFor(draft)),
       prompt,
     };
@@ -219,6 +247,7 @@ export function Workspace() {
         ...current.draft,
         mode: saved.mode,
         guardrails: saved.guardrails,
+        detail: saved.detail ?? current.draft.detail,
         projectId: current.projects.some((entry) => entry.id === saved.projectId)
           ? saved.projectId
           : current.draft.projectId,
@@ -257,6 +286,22 @@ export function Workspace() {
               </option>
             ))}
           </select>
+
+          {project ? (
+            <button
+              type="button"
+              onClick={() => setDialog("guidelines")}
+              title="View the Guidelines.md generated from this project profile"
+              className="inline-flex h-8 items-center gap-1.5 rounded border border-fpb-line-strong bg-fpb-panel px-2 text-[12px] text-fpb-muted transition-colors hover:text-fpb-ink"
+            >
+              <span
+                aria-hidden
+                className={`h-1.5 w-1.5 rounded-full ${project.guidelinesInstalled ? "bg-fpb-positive" : "bg-fpb-faint"}`}
+              />
+              {project.guidelinesInstalled ? "Guidelines active" : "Guidelines not installed"}
+              <BookOpen aria-hidden className="h-3.5 w-3.5 text-fpb-faint" />
+            </button>
+          ) : null}
 
           <div className="ml-auto flex flex-wrap items-center gap-1.5">
             <Button size="sm" onClick={() => setDialog("projects")}>
@@ -371,7 +416,17 @@ export function Workspace() {
           aria-label="Generated prompt"
           className={`min-h-0 flex-1 ${view === "prompt" ? "" : "hidden lg:block"}`}
         >
-          <PromptPanel prompt={prompt} readiness={readiness} copied={copied} onCopy={handleCopy} />
+          <PromptPanel
+            prompt={prompt}
+            readiness={readiness}
+            copied={copied}
+            onCopy={handleCopy}
+            mode={draft.mode}
+            contextMode={promptContext.contextMode}
+            detail={draft.detail}
+            onContextModeChange={setContextMode}
+            onDetailChange={(detail: DetailLevel) => patchDraft({ detail })}
+          />
         </section>
       </main>
 
@@ -385,6 +440,20 @@ export function Workspace() {
           onSetDefault={(id) =>
             updateState((current) => ({ ...current, settings: { ...current.settings, defaultProjectId: id } }))
           }
+          onViewGuidelines={(id: string) => {
+            patchDraft({ projectId: id });
+            setDialog("guidelines");
+          }}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
+
+      {dialog === "guidelines" && project ? (
+        <GuidelinesModal
+          project={project}
+          guardrails={draft.guardrails}
+          onSetInstalled={(installed) => patchProject(project.id, { guidelinesInstalled: installed })}
+          onCopy={copyText}
           onClose={() => setDialog(null)}
         />
       ) : null}

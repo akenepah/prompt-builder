@@ -1,19 +1,29 @@
 /**
  * Shared writing utilities and the reusable blocks that appear across
- * more than one prompt mode (design system, guardrails, final review,
- * the container-expansion rule).
+ * more than one prompt mode.
  *
  * Rules of the house:
  *  - never emit a heading with an empty or meaningless body
  *  - never emit a raw form value where a sentence is clearer
  *  - concrete instructions beat adjectives ("modern", "clean", "premium")
+ *  - say each thing once, in the section that owns it
+ *
+ * Every block takes the detail level so verbosity can flex without any
+ * requirement being dropped: detail controls explanation, not content.
  */
 
-import type { Density, ProjectProfile } from "../types";
+import type { ContextMode, Density, DetailLevel, ProjectProfile } from "../types";
 
 export interface PromptSection {
   heading: string;
   body: string;
+}
+
+export interface PromptContext {
+  project: ProjectProfile | null;
+  guardrails: boolean;
+  contextMode: ContextMode;
+  detail: DetailLevel;
 }
 
 /* ------------------------------------------------------------------ */
@@ -99,23 +109,6 @@ export function asSentence(value: string): string {
   return /[.!?:]$/.test(text) ? text : `${text}.`;
 }
 
-const ORDINALS = [
-  "first",
-  "second",
-  "third",
-  "fourth",
-  "fifth",
-  "sixth",
-  "seventh",
-  "eighth",
-  "ninth",
-  "tenth",
-];
-
-export function ordinal(index: number): string {
-  return ORDINALS[index] ?? `${index + 1}th`;
-}
-
 export function section(heading: string, body: string): PromptSection | null {
   const text = clean(body);
   if (!text) return null;
@@ -130,20 +123,50 @@ export function renderSections(sections: Array<PromptSection | null>): string {
 }
 
 /* ------------------------------------------------------------------ */
-/* shared prompt blocks                                                */
+/* detail level                                                        */
 /* ------------------------------------------------------------------ */
 
-export const ROLE_LINE =
-  "You are acting as a senior product designer and UX architect, not a UI decorator. Make deliberate decisions about what matters on this screen, give that thing real visual priority, and let everything else recede.";
+const DETAIL_RANK: Record<DetailLevel, number> = { focused: 0, standard: 1, comprehensive: 2 };
 
-export const EXPANSION_RULE =
-  "If more room is needed, expand the relevant parent frame or container. Do not shrink typography, compress the spacing scale, clip content, break component proportions, or force awkward text wrapping to make something fit. Readable typography and the established spacing scale take priority over a fixed frame height.";
+/** True when the prompt is at or above the given verbosity. */
+export function atLeast(detail: DetailLevel, level: DetailLevel): boolean {
+  return DETAIL_RANK[detail] >= DETAIL_RANK[level];
+}
 
-export const CONTENT_HONESTY_RULE =
-  "Use only the content provided. Do not invent statistics, metrics, testimonials, customer logos, awards, pricing or product features, and never use lorem ipsum. Where exact copy is not specified, write short, plausible, specific copy in the product's voice — no filler.";
+/** Explanatory tails: kept at standard and above, dropped when focused. */
+export function explain(detail: DetailLevel, text: string): string {
+  return atLeast(detail, "standard") ? text : "";
+}
 
-export function projectContextLine(project: ProjectProfile | null): string {
+/** Extra implementation depth: comprehensive only. */
+export function deep(detail: DetailLevel, text: string): string {
+  return atLeast(detail, "comprehensive") ? text : "";
+}
+
+/* ------------------------------------------------------------------ */
+/* project context                                                     */
+/* ------------------------------------------------------------------ */
+
+export const GUIDELINES_POINTER =
+  "Follow the project's existing Guidelines.md and the selected design system as authoritative. Do not override established project-level typography, color, spacing, component, accessibility or composition rules unless this task explicitly instructs otherwise. Anything stated below is specific to this task and overrides the project defaults only where it says so.";
+
+/**
+ * Who the product is for. Kept even in guidelines mode at standard and
+ * above: it is short, and it is what stops the output being generic.
+ */
+export function productContextBody(context: PromptContext): string {
+  const { project, contextMode, detail } = context;
   if (!project) return "";
+
+  if (contextMode === "guidelines") {
+    return lines(
+      GUIDELINES_POINTER,
+      atLeast(detail, "standard") && filled(project.productDescription)
+        ? `For orientation: ${asSentence(project.productDescription)}`
+        : "",
+    );
+  }
+
   return lines(
     filled(project.productDescription) && `Product: ${asSentence(project.productDescription)}`,
     filled(project.primaryUsers) && `Who uses it: ${asSentence(project.primaryUsers)}`,
@@ -152,12 +175,13 @@ export function projectContextLine(project: ProjectProfile | null): string {
 }
 
 /**
- * The project's persistent design rules. Written once per project,
- * carried into every prompt, and stated as non-negotiable so Figma does
- * not quietly substitute its own defaults.
+ * The project's persistent design rules, written into the prompt itself.
+ * Only used in embedded mode — when Guidelines.md is installed this
+ * belongs there, not in every task prompt.
  */
-export function designSystemBody(project: ProjectProfile | null): string {
-  if (!project) return "";
+export function designSystemBody(context: PromptContext): string {
+  const { project, contextMode, detail } = context;
+  if (!project || contextMode === "guidelines") return "";
 
   const type = lines(
     filled(project.headingTypeface) && `Headings: ${project.headingTypeface}`,
@@ -178,72 +202,142 @@ export function designSystemBody(project: ProjectProfile | null): string {
     filled(project.grid.margins) && `Outer margins: ${project.grid.margins}`,
   );
 
+  const surfaces = lines(
+    filled(project.radius) && `Radius: ${asSentence(project.radius)}`,
+    filled(project.borders) && `Borders: ${asSentence(project.borders)}`,
+    filled(project.shadows) && `Elevation: ${asSentence(project.shadows)}`,
+    filled(project.icons) && `Icons: ${asSentence(project.icons)}`,
+    filled(project.buttons) && `Buttons: ${asSentence(project.buttons)}`,
+    filled(project.imagery) && `Imagery: ${asSentence(project.imagery)}`,
+  );
+
   return paragraphs(
     type && `Typography\n${type}`,
-    colors.length > 0 &&
-      `Color\n${bullets(colors)}\nUse these tokens only. Do not introduce new hues, and do not use color to create hierarchy that typography and spacing should be creating.`,
-    filled(project.spacingScale) &&
-      `Spacing scale\nUse only these values: ${project.spacingScale}. Every margin, padding and gap must come from this scale — no one-off values.`,
-    layout && `Grid and layout\n${layout}`,
-    filled(project.radius) && `Corner radius\n${asSentence(project.radius)}`,
-    filled(project.borders) && `Borders\n${asSentence(project.borders)}`,
-    filled(project.shadows) && `Elevation\n${asSentence(project.shadows)}`,
-    filled(project.icons) && `Icons\n${asSentence(project.icons)}`,
-    filled(project.buttons) && `Buttons and actions\n${asSentence(project.buttons)}`,
-    filled(project.imagery) && `Imagery\n${asSentence(project.imagery)}`,
+    colors.length > 0 && `Color — use these tokens only\n${bullets(colors)}`,
+    filled(project.spacingScale) && `Spacing — every margin, padding and gap comes from this scale, no one-off values\n${project.spacingScale}`,
+    layout && `Grid\n${layout}`,
+    surfaces && `Surfaces and components\n${surfaces}`,
     filled(project.permanentRules) && `Standing rules\n${bullets(toItems(project.permanentRules))}`,
-    "These rules are not suggestions. If anything in this brief appears to conflict with them, the design system wins.",
+    "Where this brief appears to conflict with these rules, the design system wins.",
+    deep(
+      detail,
+      "Build with real components and Auto Layout so these rules hold when content length changes, rather than styling each instance by hand.",
+    ),
   );
 }
 
-export function accessibilityBody(project: ProjectProfile | null, extra?: string): string {
+/* ------------------------------------------------------------------ */
+/* universal rules                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Inventing product facts and writing interface copy are different acts.
+ * Forbidding both produces a screen full of empty labels, so the rule
+ * has to draw the line explicitly.
+ */
+export function contentHonestyBody(): string {
+  return paragraphs(
+    "Treat the supplied content as the only source of fact. Invent no statistics, metrics, prices, customer counts, testimonials, company or customer names, logos, awards, integrations or claims about what the product can do. Where a figure is needed and has not been supplied, use an obvious placeholder rather than a plausible invention.",
+    "Do write the interface copy the screen needs — button and link labels, headings, field labels, helper text, validation messages, empty-state guidance and confirmations — short, specific, in the product's voice, and never asserting a capability or fact that was not supplied. Never use lorem ipsum.",
+  );
+}
+
+export const EXPANSION_RULE =
+  "If more room is needed, expand the relevant parent frame or container. Do not shrink typography, compress the spacing scale, clip content, break component proportions, or force awkward text wrapping to make something fit. Readable typography and the established spacing scale take priority over a fixed frame height.";
+
+export const PRIMARY_ACTION_RULE =
+  "Where the workflow has a clear next step, give that action unmistakable dominance. Do not create several equal-weight primary actions unless the task genuinely requires them.";
+
+/**
+ * Accessibility baseline. Only written into the prompt in embedded mode;
+ * in guidelines mode it lives in Guidelines.md.
+ *
+ * The touch-target line deliberately separates the visible control size
+ * from its interactive area, so it cannot contradict a project that
+ * specifies, say, a 36px button.
+ */
+export function accessibilityBody(context: PromptContext, extra?: string): string {
+  const { project, contextMode, detail } = context;
   const projectRules = project ? toItems(project.accessibility) : [];
+
+  if (contextMode === "guidelines") {
+    return paragraphs(
+      filled(extra) ? asSentence(clean(extra)) : "",
+      atLeast(detail, "comprehensive")
+        ? "Apply the project's accessibility rules from Guidelines.md to everything added here."
+        : "",
+    );
+  }
+
   const base = [
-    "Body text meets at least 4.5:1 contrast against its background; large text and meaningful icons at least 3:1.",
-    "Every interactive element has a visible, non-color-only focus state.",
-    "Interactive targets are at least 44×44px on touch, with adequate spacing between adjacent targets.",
-    "Never use color alone to carry meaning — pair it with text, weight, an icon or position.",
-    "Headings follow a sensible order and labels sit with their inputs, so the screen reads correctly top to bottom.",
+    "Body text meets at least 4.5:1 contrast, large text and meaningful icons at least 3:1.",
+    "Every interactive element has a visible focus state that does not rely on color alone.",
+    "Touch hit areas are at least 44×44px. Where a control's specified visual size is smaller, keep the visual size and extend the hit area with padding — do not enlarge the visible control.",
+    "Never use color alone to carry meaning.",
+    ...(atLeast(detail, "comprehensive")
+      ? ["Headings follow a sensible order and labels sit with their inputs, so the screen reads correctly top to bottom."]
+      : []),
   ];
   return paragraphs(bullets([...projectRules, ...base]), filled(extra) ? asSentence(clean(extra)) : "");
 }
 
-export function responsiveBody(project: ProjectProfile | null, extra?: string): string {
+export function responsiveBody(context: PromptContext, extra?: string): string {
+  const { project, contextMode, detail } = context;
   return lines(
-    project && filled(project.breakpoints) && `Breakpoints: ${asSentence(project.breakpoints)}`,
+    contextMode === "embedded" && project && filled(project.breakpoints)
+      ? `Breakpoints: ${asSentence(project.breakpoints)}`
+      : "",
     filled(extra) ? clean(extra) : "",
-    "The information hierarchy must survive every breakpoint. Narrow layouts reflow and stack — they do not reorder priorities, hide primary actions behind menus, or shrink type below readable sizes.",
+    explain(
+      detail,
+      "The information hierarchy must survive every breakpoint. Narrow layouts reflow and stack — they do not reorder priorities, hide primary actions behind menus, or shrink type below readable sizes.",
+    ),
   );
 }
 
 /* ------------------------------------------------------------------ */
-/* anti-AI-UI guardrails                                               */
+/* anti-AI-UI guardrails — one authoritative block, never repeated      */
 /* ------------------------------------------------------------------ */
 
 const GUARDRAIL_AVOID = [
-  "Cards and containers used as default packaging. A box is only justified when it groups things that genuinely belong together and are separated from what surrounds them.",
-  "Arbitrary rounded rectangles, pills and badges used as decoration rather than to communicate state.",
+  "Cards and containers as default packaging — use spacing and alignment first, and add a container only where it groups things that belong together.",
+  "Rounded rectangles, pills and badges used as decoration rather than to show state.",
   "Gradients, glassmorphism, glows and heavy drop shadows.",
-  "Generic SaaS-dashboard styling: a wall of equal-weight stat tiles, decorative charts with no data behind them, floating widgets with no owner.",
-  "Bento grids adopted for their own sake, where the grid is not carrying a real relationship between the items.",
-  "Oversized marketing headlines that push real content below the fold and destroy information density.",
-  "Random icons beside every label, and icons that repeat the word next to them.",
-  "Lorem ipsum, invented statistics, invented logos and invented product features.",
+  "Generic SaaS-dashboard styling: equal-weight stat tiles, charts with no data behind them, floating widgets with no owner.",
+  "Bento grids adopted for their own sake.",
+  "Oversized marketing headlines that push real content below the fold.",
+  "An icon beside every label, or icons that repeat the word next to them.",
 ];
 
 const GUARDRAIL_PREFER = [
-  "Type scale, weight and color contrast to create hierarchy.",
+  "Type scale, weight and contrast to create hierarchy.",
   "Spacing and alignment to create grouping — proximity before boxes.",
   "A single hairline divider where separation is genuinely needed.",
-  "Intentional whitespace, used unevenly: more space around what matters, less inside what belongs together.",
+  "Whitespace used unevenly: more around what matters, less inside what belongs together.",
 ];
 
-export function guardrailsBody(project: ProjectProfile | null): string {
-  const projectDoNots = project ? toItems(project.doNotRules) : [];
+/** The guardrail rules as a list, for reuse in Guidelines.md. */
+export function guardrailItems(): { avoid: string[]; prefer: string[] } {
+  return { avoid: [...GUARDRAIL_AVOID], prefer: [...GUARDRAIL_PREFER] };
+}
+
+/**
+ * In guidelines mode this returns nothing: the guardrails are part of
+ * Guidelines.md, and repeating them in every prompt is exactly the
+ * redundancy this mode exists to remove.
+ */
+export function guardrailsBody(context: PromptContext): string {
+  const { project, guardrails, contextMode, detail } = context;
+  const projectDoNots = contextMode === "embedded" && project ? toItems(project.doNotRules) : [];
+
+  if (!guardrails) return projectDoNots.length > 0 ? bullets(projectDoNots) : "";
+  if (contextMode === "guidelines") return "";
+
+  const avoid = atLeast(detail, "comprehensive") ? GUARDRAIL_AVOID : GUARDRAIL_AVOID.slice(0, 5);
   return paragraphs(
-    projectDoNots.length > 0 ? `Standing project rules that always apply:\n${bullets(projectDoNots)}` : "",
-    `This design must not read as generic AI-generated UI. Avoid:\n${bullets(GUARDRAIL_AVOID)}`,
-    `Before adding any container, shadow, badge or icon, try solving the problem with:\n${bullets(GUARDRAIL_PREFER)}\nOnly add a container when those have been tried and are genuinely insufficient.`,
+    projectDoNots.length > 0 ? bullets(projectDoNots) : "",
+    `This must not read as generic AI-generated UI. Avoid:\n${bullets(avoid)}`,
+    deep(detail, `Before adding a container, shadow, badge or icon, try:\n${bullets(GUARDRAIL_PREFER)}`),
   );
 }
 
@@ -251,18 +345,25 @@ export function guardrailsBody(project: ProjectProfile | null): string {
 /* density                                                             */
 /* ------------------------------------------------------------------ */
 
-const DENSITY_COPY: Record<Exclude<Density, "">, string> = {
-  spacious:
-    "Spacious. Use the upper end of the spacing scale between sections, give primary content generous breathing room, and accept a longer page rather than crowding. Whitespace is doing real work here — do not fill it.",
-  balanced:
-    "Balanced. Generous separation between major sections, tight and deliberate grouping within them, so the eye can find the seams of the page without scanning.",
-  dense:
-    "Dense but not cramped. Use the lower end of the spacing scale, favor compact rows and tables over cards, and keep more information above the fold. Density must not come from shrinking type — hold the body size and tighten spacing instead.",
+const DENSITY_COPY: Record<Exclude<Density, "">, { short: string; full: string }> = {
+  spacious: {
+    short: "Spacious — upper end of the spacing scale, generous room around primary content.",
+    full: "Spacious. Use the upper end of the spacing scale between sections, give primary content generous breathing room, and accept a longer page rather than crowding. Whitespace is doing real work here — do not fill it.",
+  },
+  balanced: {
+    short: "Balanced — generous between sections, tight within them.",
+    full: "Balanced. Generous separation between major sections, tight and deliberate grouping within them, so the eye can find the seams of the page without scanning.",
+  },
+  dense: {
+    short: "Dense — lower end of the spacing scale, compact rows over cards, hold body type size.",
+    full: "Dense but not cramped. Use the lower end of the spacing scale, favor compact rows and tables over cards, and keep more information above the fold. Density must not come from shrinking type — hold the body size and tighten spacing instead.",
+  },
 };
 
-export function densityLine(density: Density): string {
+export function densityLine(density: Density, detail: DetailLevel): string {
   if (!density) return "";
-  return `Information density: ${DENSITY_COPY[density]}`;
+  const copy = DENSITY_COPY[density];
+  return `Density: ${atLeast(detail, "standard") ? copy.full : copy.short}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -272,43 +373,78 @@ export function densityLine(density: Density): string {
 const STATE_COPY: Record<string, string> = {
   Default: "Default — the resting state, legible and unambiguous without hover.",
   Hover: "Hover — a restrained change (background, border or underline). Do not move or resize the element.",
-  Focus: "Focus — a clearly visible keyboard focus ring that is not conveyed by color alone and is never removed.",
+  Focus: "Focus — a clearly visible keyboard focus ring that is never removed.",
   Active: "Active/pressed — an immediate, obvious response to the press.",
   Selected: "Selected — persistent, readable at a glance, and distinct from hover.",
-  Disabled: "Disabled — visibly inert but still legible; never a grey blur, and never the only explanation for why an action is unavailable.",
-  Loading: "Loading — preserve layout dimensions so nothing jumps when content arrives. Skeletons over spinners for content areas; in-place feedback for buttons.",
-  Empty: "Empty — explain what belongs here and offer the single action that fills it. No decorative illustration, no dead end.",
+  Disabled: "Disabled — visibly inert but still legible, and never the only explanation for why an action is unavailable.",
+  Loading: "Loading — preserve layout dimensions so nothing jumps when content arrives. Skeletons for content areas, in-place feedback for buttons.",
+  Empty: "Empty — explain what belongs here and offer the action that fills it. No decorative illustration, no dead end.",
   Error: "Error — say what went wrong and what to do next, next to the thing that failed. Never a bare red border.",
   Success: "Success — confirm what happened and what changed, then get out of the way.",
 };
 
-export function statesBody(states: string[], notes: string): string {
-  const copy = states.map((state) => STATE_COPY[state] ?? state);
-  return paragraphs(filled(notes) ? asSentence(clean(notes)) : "", copy.length > 0 ? `Design these states explicitly:\n${bullets(copy)}` : "");
+const STATE_SHORT: Record<string, string> = {
+  Default: "Default — legible and unambiguous without hover.",
+  Hover: "Hover — a restrained change; never moves or resizes the element.",
+  Focus: "Focus — a visible keyboard ring, never removed.",
+  Active: "Active/pressed — an immediate response to the press.",
+  Selected: "Selected — persistent and distinct from hover.",
+  Disabled: "Disabled — visibly inert but still legible.",
+  Loading: "Loading — hold layout dimensions so nothing jumps; skeletons, not spinners.",
+  Empty: "Empty — say what belongs here and offer the action that fills it.",
+  Error: "Error — what went wrong and what to do next, beside what failed.",
+  Success: "Success — confirm what changed, then get out of the way.",
+};
+
+export function statesBody(states: string[], notes: string, detail: DetailLevel): string {
+  if (states.length === 0) return filled(notes) ? asSentence(clean(notes)) : "";
+  const copy = states.map((state) =>
+    atLeast(detail, "comprehensive") ? (STATE_COPY[state] ?? state) : (STATE_SHORT[state] ?? state),
+  );
+  return paragraphs(
+    filled(notes) ? asSentence(clean(notes)) : "",
+    `Design these states explicitly:\n${bullets(copy)}`,
+  );
 }
 
 /* ------------------------------------------------------------------ */
-/* final design review                                                 */
+/* execution order and closing review                                  */
 /* ------------------------------------------------------------------ */
 
-const REVIEW_QUESTIONS = [
-  "Can someone understand what this screen is for within about five seconds?",
-  "Is the primary action obvious without hunting?",
-  "Does the visual hierarchy match the user's actual priorities, rather than giving everything equal weight?",
-  "Are related items visually grouped, and unrelated items clearly separated?",
+export function executionOrderBody(detail: DetailLevel): string {
+  return lines(
+    "Establish the page structure, grid, information hierarchy, section relationships and responsive composition before spending effort on decorative polish. Structure is the hardest thing to correct later. Once the foundation is coherent, apply the visual system and interaction detail.",
+    explain(detail, "Produce the finished screen in one pass — this is the order to reason and work in, not a instruction to stop early."),
+  );
+}
+
+const REVIEW_CORE = [
+  "Can someone understand what this screen is for, and what to do next, within about five seconds?",
+  "Does the visual weight of each section match the stated hierarchy, rather than everything being equal?",
   "Is every container, card and divider earning its place, or is some of it packaging?",
-  "Is anything competing with more important information for attention?",
-  "Does any part of this look like stereotypical AI-generated UI?",
-  "Does the result actually follow the project's type, color, spacing and grid rules?",
-  "Does the responsive behavior preserve the hierarchy, or does it flatten it?",
-  "Could anything be removed without hurting comprehension?",
 ];
 
-export function finalReviewBody(): string {
+const REVIEW_EXTRA = [
+  "Does the responsive behavior preserve the hierarchy rather than flattening it?",
+  "Does anything assert a fact that was not supplied, or could anything be removed without hurting comprehension?",
+];
+
+const REVIEW_DEEP = [
+  "Does every spacing, type and color value come from the system rather than being improvised?",
+  "Does each designed state read correctly, including empty and error?",
+  "Would a designer looking at this be able to tell what the screen is for without the brief?",
+];
+
+export function finalReviewBody(detail: DetailLevel): string {
+  const questions = [
+    ...REVIEW_CORE,
+    ...(atLeast(detail, "standard") ? REVIEW_EXTRA : []),
+    ...(atLeast(detail, "comprehensive") ? REVIEW_DEEP : []),
+  ];
   return lines(
-    "Before you finish, review your own output against these questions:",
-    numbered(REVIEW_QUESTIONS),
+    "Check your own output before finishing:",
+    numbered(questions),
     "",
-    "Where an answer exposes a problem, fix it rather than noting it. Where removing something improves the design, remove it.",
+    "Fix what these expose rather than noting it. Where removing something improves the design, remove it.",
   );
 }

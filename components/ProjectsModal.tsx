@@ -5,7 +5,7 @@
  * prompt, so they are written once instead of retyped per brief.
  */
 
-import { Check, Copy, Pencil, Plus, Trash2 } from "lucide-react";
+import { BookOpen, Check, Copy, Pencil, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { duplicateProject, emptyProject, sampleProject } from "@/lib/prompt/defaults";
 import type { ProjectProfile } from "@/lib/prompt/types";
@@ -19,6 +19,7 @@ export function ProjectsModal({
   onSave,
   onSelect,
   onSetDefault,
+  onViewGuidelines,
   onClose,
 }: {
   projects: ProjectProfile[];
@@ -27,6 +28,7 @@ export function ProjectsModal({
   onSave: (projects: ProjectProfile[]) => void;
   onSelect: (id: string) => void;
   onSetDefault: (id: string) => void;
+  onViewGuidelines: (id: string) => void;
   onClose: () => void;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -72,8 +74,14 @@ export function ProjectsModal({
           <div className="max-h-[70vh] overflow-y-auto">
             <ProjectEditor project={editing} onChange={update} />
           </div>
-          <footer className="flex items-center justify-between gap-3 border-t border-fpb-line px-5 py-3">
-            <Button onClick={() => setEditingId(null)}>Back to all projects</Button>
+          <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-fpb-line px-5 py-3">
+            <div className="flex gap-2">
+              <Button onClick={() => setEditingId(null)}>Back to all projects</Button>
+              <Button onClick={() => onViewGuidelines(editing.id)}>
+                <BookOpen aria-hidden className="h-3.5 w-3.5" />
+                Figma Guidelines
+              </Button>
+            </div>
             <Button
               variant="primary"
               onClick={() => {
@@ -106,8 +114,19 @@ export function ProjectsModal({
                     <p className="mt-0.5 truncate text-[12px] text-fpb-faint">
                       {project.productDescription || "No product description yet"}
                     </p>
+                    <p className="mt-1 flex items-center gap-1.5 text-[11.5px] text-fpb-muted">
+                      <span
+                        aria-hidden
+                        className={`h-1.5 w-1.5 rounded-full ${project.guidelinesInstalled ? "bg-fpb-positive" : "bg-fpb-faint"}`}
+                      />
+                      {project.guidelinesInstalled ? "Guidelines active" : "Guidelines not installed"}
+                    </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
+                    <Button size="sm" onClick={() => onViewGuidelines(project.id)}>
+                      <BookOpen aria-hidden className="h-3.5 w-3.5" />
+                      Figma Guidelines
+                    </Button>
                     <Button size="sm" onClick={() => setEditingId(project.id)}>
                       <Pencil aria-hidden className="h-3.5 w-3.5" />
                       Edit

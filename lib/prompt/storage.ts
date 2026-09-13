@@ -6,7 +6,7 @@
  * errors must degrade to an in-memory session rather than a broken app.
  */
 
-import { SAMPLE_PROJECT_ID, emptyDraft, sampleDraft, sampleProject } from "./defaults";
+import { SAMPLE_PROJECT_ID, emptyDraft, emptyProject, sampleDraft, sampleProject } from "./defaults";
 import type { PersistedState } from "./types";
 
 const KEY = "figma-prompt-builder.v1";
@@ -34,7 +34,15 @@ export function reviveState(raw: unknown): PersistedState {
   const base = initialState();
   if (!isRecord(raw)) return base;
 
-  const projects = Array.isArray(raw.projects) ? (raw.projects as PersistedState["projects"]).filter(isRecord) : base.projects;
+  /**
+   * Fields added after a payload was written (v1.1 added
+   * guidelinesInstalled) must be filled in, not left undefined.
+   */
+  const projects = Array.isArray(raw.projects)
+    ? (raw.projects as PersistedState["projects"])
+        .filter(isRecord)
+        .map((project) => ({ ...emptyProject(), ...project, grid: { ...emptyProject().grid, ...(project.grid ?? {}) } }))
+    : base.projects;
   const savedPrompts = Array.isArray(raw.savedPrompts)
     ? (raw.savedPrompts as PersistedState["savedPrompts"]).filter(isRecord)
     : [];

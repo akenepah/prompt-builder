@@ -1,37 +1,36 @@
 /**
  * Prompt compiler entry point.
  *
- * Every mode is a pure function of (brief, project, guardrails). Keeping
- * the signature uniform is what makes an optional LLM polish stage a
- * later drop-in: an enhancer takes the compiled deterministic prompt and
- * returns a better one, without any caller needing to change.
+ * Every mode is a pure function of (brief, context), where context
+ * carries the project, the guardrail switch, whether Guidelines.md is
+ * installed, and how verbose the output should be. Keeping the signature
+ * uniform is what makes an optional LLM polish stage a later drop-in.
  */
 
-import type {
-  Draft,
-  NewScreenBrief,
-  ProjectProfile,
-  PromptMode,
-  QABrief,
-  ReferenceBrief,
-  RefineBrief,
-  SavedPrompt,
-} from "../types";
+import type { Draft, NewScreenBrief, ProjectProfile, PromptMode, QABrief, ReferenceBrief, RefineBrief, SavedPrompt } from "../types";
 import { compileDesignQA } from "./designQA";
 import { compileNewScreen } from "./newScreen";
 import { compileReferenceTranslation } from "./referenceTranslation";
 import { compileRefineExisting } from "./refineExisting";
+import type { PromptContext } from "./shared";
 
-export interface CompileOptions {
-  project: ProjectProfile | null;
-  guardrails: boolean;
-}
+export type { PromptContext };
 
 /** Reserved extension point for a future LLM polish stage. */
-export type PromptEnhancer = (prompt: string, context: CompileOptions & { mode: PromptMode }) => Promise<string>;
+export type PromptEnhancer = (prompt: string, context: PromptContext & { mode: PromptMode }) => Promise<string>;
+
+/** A project with Guidelines.md installed does not need its rules repeated. */
+export function contextFor(draft: Draft, project: ProjectProfile | null): PromptContext {
+  return {
+    project,
+    guardrails: draft.guardrails,
+    contextMode: project?.guidelinesInstalled ? "guidelines" : "embedded",
+    detail: draft.detail,
+  };
+}
 
 export function compileDraft(draft: Draft, project: ProjectProfile | null): string {
-  return compileBrief(draft.mode, briefFor(draft), { project, guardrails: draft.guardrails });
+  return compileBrief(draft.mode, briefFor(draft), contextFor(draft, project));
 }
 
 export function briefFor(draft: Draft): SavedPrompt["brief"] {
@@ -47,20 +46,16 @@ export function briefFor(draft: Draft): SavedPrompt["brief"] {
   }
 }
 
-export function compileBrief(
-  mode: PromptMode,
-  brief: SavedPrompt["brief"],
-  options: CompileOptions,
-): string {
+export function compileBrief(mode: PromptMode, brief: SavedPrompt["brief"], context: PromptContext): string {
   switch (mode) {
     case "new-screen":
-      return compileNewScreen(brief as NewScreenBrief, options.project, options.guardrails);
+      return compileNewScreen(brief as NewScreenBrief, context);
     case "reference":
-      return compileReferenceTranslation(brief as ReferenceBrief, options.project, options.guardrails);
+      return compileReferenceTranslation(brief as ReferenceBrief, context);
     case "refine":
-      return compileRefineExisting(brief as RefineBrief, options.project, options.guardrails);
+      return compileRefineExisting(brief as RefineBrief, context);
     case "qa":
-      return compileDesignQA(brief as QABrief, options.project);
+      return compileDesignQA(brief as QABrief, context);
   }
 }
 

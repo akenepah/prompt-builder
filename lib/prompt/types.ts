@@ -10,6 +10,18 @@
 
 export type PromptMode = "new-screen" | "reference" | "refine" | "qa";
 
+/**
+ * Where the project's design system lives for this prompt.
+ *
+ * "guidelines" — the profile has been installed in the Figma Make project
+ * as Guidelines.md, so prompts point at it instead of restating it.
+ * "embedded" — no Guidelines.md, so each prompt carries the rules itself.
+ */
+export type ContextMode = "guidelines" | "embedded";
+
+/** How much explanatory prose a prompt carries. Never removes requirements. */
+export type DetailLevel = "focused" | "standard" | "comprehensive";
+
 export interface ColorToken {
   id: string;
   name: string;
@@ -45,6 +57,8 @@ export interface ProjectProfile {
   accessibility: string;
   permanentRules: string;
   doNotRules: string;
+  /** User-controlled local state: has this profile been installed as Guidelines.md? */
+  guidelinesInstalled: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -148,6 +162,7 @@ export interface Draft {
   mode: PromptMode;
   projectId: string;
   guardrails: boolean;
+  detail: DetailLevel;
   newScreen: NewScreenBrief;
   reference: ReferenceBrief;
   refine: RefineBrief;
@@ -163,6 +178,8 @@ export interface SavedPrompt {
   createdAt: number;
   updatedAt: number;
   guardrails: boolean;
+  detail: DetailLevel;
+  contextMode: ContextMode;
   brief: NewScreenBrief | ReferenceBrief | RefineBrief | QABrief;
   prompt: string;
 }

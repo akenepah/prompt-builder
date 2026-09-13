@@ -50,6 +50,7 @@ export function emptyProject(name = "Untitled project"): ProjectProfile {
     accessibility: "",
     permanentRules: "",
     doNotRules: "",
+    guidelinesInstalled: false,
     createdAt: now,
     updatedAt: now,
   };
@@ -139,6 +140,7 @@ export function emptyDraft(projectId: string): Draft {
     mode: "new-screen",
     projectId,
     guardrails: true,
+    detail: "standard",
     newScreen: emptyNewScreen(),
     reference: emptyReference(),
     refine: emptyRefine(),
@@ -195,6 +197,7 @@ export function sampleProject(): ProjectProfile {
       "Every figure states its currency and its period.\nFigures are tabular and right-aligned so columns compare at a glance.\nAnything projected rather than actual is visibly marked as projected, everywhere it appears.\nUse a table whenever more than three values are being compared — not cards.\nWherever live data is shown, the last-synced time is visible.",
     doNotRules:
       "No row of dashboard tiles showing a bare number with no comparison.\nNo gradients, glows or glassmorphism.\nNo decorative charts — every chart answers a question that has been stated.\nNo icon-only buttons in primary flows.\nNever invent figures, company names or logos.",
+    guidelinesInstalled: false,
     createdAt: now,
     updatedAt: now,
   };
@@ -286,6 +289,7 @@ export function sampleDraft(): Draft {
     mode: "new-screen",
     projectId: SAMPLE_PROJECT_ID,
     guardrails: true,
+    detail: "standard",
     newScreen: sampleNewScreenBrief(),
     reference: emptyReference(),
     refine: emptyRefine(),
